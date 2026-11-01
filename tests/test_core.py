@@ -181,6 +181,8 @@ def test_channel_delete_protects_tx_and_confirms(tmp_path,monkeypatch):
  called=[];monkeypatch.setattr("dispatch.routes.delete_channel",lambda *a:called.append(a))
  client.post("/settings/channels/delete",data={"csrf_token":token,"slot":"2","name":"#wx","confirm":"yes"})
  assert not called
+ client.post("/settings/channels/delete",data={"csrf_token":token,"slot":"0","name":"Public","confirm":"yes"})
+ assert not called
  db.save_setting("tx_channel","null")
  client.post("/settings/channels/delete",data={"csrf_token":token,"slot":"3","name":"#other","confirm":"yes"})
  assert called and db.history()[0]["action"]=="channel_deleted"
@@ -243,19 +245,53 @@ def test_xiao_unknown_channel_replies_are_not_counted_as_occupied_or_empty(monke
  assert not discovery["slots"][2]["occupied"] and discovery["slots"][2]["known"]
  assert discovery["slots"][39]["state"]=="unknown" and not discovery["slots"][39]["occupied"]
 
-def test_settings_shows_radio_name_slot_states_and_delete_for_non_public(tmp_path,monkeypatch):
+def test_settings_channel_table_hides_slots_and_protects_public_and_tx(tmp_path,monkeypatch):
  app=create_app(config(tmp_path));client=app.test_client()
  with client.session_transaction() as s:s["user"]="admin"
- slots=[{"index":0,"name":"Public","occupied":True,"known":True,"state":"occupied"},{"index":1,"name":"#myreach","occupied":True,"known":True,"state":"occupied"}]
- slots.extend({"index":i,"name":"","occupied":False,"known":False,"state":"unknown"} for i in range(2,40))
+ app.extensions["db"].save_setting("tx_channel",'{"index": 1, "name": "#myreach"}')
+ slots=[{"index":0,"name":"Public","occupied":True,"known":True,"state":"occupied"},{"index":1,"name":"#myreach","occupied":True,"known":True,"state":"occupied"},{"index":2,"name":"#owe-wx-test","occupied":True,"known":True,"state":"occupied"}]
+ slots.extend({"index":i,"name":"","occupied":False,"known":True,"state":"empty"} for i in range(3,40))
  monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/x"},"Connected"))
  monkeypatch.setattr("dispatch.routes.discover_channels",lambda dev:{"capacity":40,"slots":slots})
  monkeypatch.setattr("dispatch.routes.read_device_name",lambda dev:"WXALERT")
  page=client.get("/settings").data.decode()
- assert "2 occupied, 0 confirmed available, 38 unknown" in page
+ assert "40</b> total capacity" in page and "3</b> configured" in page and "37</b> available" in page
  assert "Current radio name (read from the connected Companion): <b>WXALERT</b>" in page
- assert 'value="WXALERT"' in page and "unknown (not eligible for changes)" in page
- assert page.count(">Delete</button>")==1 and "Confirm delete #myreach (slot 1)" in page
+ assert 'value="WXALERT"' in page and "#myreach" in page and "#owe-wx-test" in page
+ assert "Slot 0" not in page and "Deselect TX channel first" in page and page.count(">Delete</button>")==1
+ assert 'name="slot" value="3"' in page and "delete-channel-dialog" in page
+
+def test_channel_delete_requires_server_confirmation_and_stale_data_is_safe(tmp_path,monkeypatch):
+ app=create_app(config(tmp_path));db=app.extensions["db"];client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/x","stable_path":"/dev/by-id/x"},"Connected"))
+ monkeypatch.setattr("dispatch.routes.discover_channels",lambda dev:{"capacity":4,"slots":[]})
+ token=client.get("/settings").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
+ called=[];monkeypatch.setattr("dispatch.routes.delete_channel",lambda *a:called.append(a))
+ client.post("/settings/channels/delete",data={"csrf_token":token,"slot":"1","name":"#owe-wx-test"})
+ assert not called and not db.history()
+ monkeypatch.setattr("dispatch.routes.delete_channel",lambda *a: (_ for _ in ()).throw(RadioError("channel changed since confirmation; deletion blocked")))
+ client.post("/settings/channels/delete",data={"csrf_token":token,"slot":"1","name":"#owe-wx-test","confirm":"yes"})
+ assert not db.history()
+
+def test_channel_table_full_capacity_disables_add(tmp_path,monkeypatch):
+ app=create_app(config(tmp_path));client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ slots=[{"index":i,"name":f"#channel-{i}","occupied":True,"known":True,"state":"occupied"} for i in range(4)]
+ monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/x"},"Connected"))
+ monkeypatch.setattr("dispatch.routes.discover_channels",lambda dev:{"capacity":4,"slots":slots})
+ monkeypatch.setattr("dispatch.routes.read_device_name",lambda dev:"WXALERT")
+ page=client.get("/settings").data.decode()
+ assert "No confirmed empty slots; Add Channel is disabled." in page and 'action="/settings/channels/add"' not in page
+
+def test_none_serial_session_becomes_useful_radio_error(monkeypatch):
+ class MeshCore:
+  @staticmethod
+  async def create_serial(path): return None
+ monkeypatch.setitem(sys.modules,"meshcore",SimpleNamespace(MeshCore=MeshCore))
+ try: asyncio.run(adapter._open("/dev/fake"))
+ except RadioError as error: assert "usable session" in str(error)
+ else: assert False, "a None radio must not reach .commands"
 
 def test_device_name_uses_readback_when_firmware_omits_a_name_limit(monkeypatch):
  state={"name":"OLD"}
