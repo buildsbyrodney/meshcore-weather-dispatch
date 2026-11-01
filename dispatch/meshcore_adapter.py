@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio, os, hashlib, re, threading
 
 READ_TIMEOUT = 10
-radio_lock = threading.Lock()
+radio_lock = threading.RLock()
 class RadioError(Exception): pass
 
 async def _close(radio):
@@ -20,7 +20,11 @@ async def _close(radio):
 async def _open(path: str):
     try:
         from meshcore import MeshCore
-        return await asyncio.wait_for(MeshCore.create_serial(path), READ_TIMEOUT)
+        radio=await asyncio.wait_for(MeshCore.create_serial(path), READ_TIMEOUT)
+        if radio is None or not hasattr(radio,"commands"):
+            raise RadioError("Companion connection did not produce a usable session; reconnect the USB device and retry")
+        return radio
+    except RadioError: raise
     except PermissionError as exc: raise RadioError("serial permission denied; add weatherdispatch to the dialout group") from exc
     except asyncio.TimeoutError as exc: raise RadioError("Companion connection timed out") from exc
     except Exception as exc: raise RadioError(f"Companion connection failed: {exc}") from exc
@@ -68,11 +72,12 @@ async def _slots_serial(path: str) -> dict:
 def list_channels(device: dict | None) -> list[dict]:
     """Read configured channel slots only; never creates or changes a channel."""
     if not device: raise RadioError("no verified Companion device")
-    return [{"index":slot["index"],"name":slot["name"]} for slot in asyncio.run(_slots_serial(device["device"]))["slots"] if slot["name"]]
+    with radio_lock:
+        return [{"index":slot["index"],"name":slot["name"]} for slot in asyncio.run(_slots_serial(device["device"]))["slots"] if slot["name"]]
 
 def discover_channels(device: dict | None) -> dict:
     if not device: raise RadioError("no verified Companion device")
-    return asyncio.run(_slots_serial(device["device"]))
+    with radio_lock: return asyncio.run(_slots_serial(device["device"]))
 
 def validate_hashtag(name: str) -> str:
     name=name.strip()
@@ -97,13 +102,14 @@ async def _write_channel_serial(path: str, slot: int, name: str) -> None:
 
 def add_hashtag_channel(device: dict | None, slot: int, name: str) -> dict:
     if not device: raise RadioError("no verified Companion device")
-    name=validate_hashtag(name); before=discover_channels(device)
-    target=next((x for x in before["slots"] if x["index"]==slot),None)
-    if not target or target["occupied"]: raise RadioError("selected slot is not confirmed empty")
-    asyncio.run(_write_channel_serial(device["device"],slot,name))
-    after=discover_channels(device); verified=next((x for x in after["slots"] if x["index"]==slot),None)
-    if not verified or verified["name"] != name: raise RadioError("channel write was not verified by read-back")
-    return {"index":slot,"name":name}
+    with radio_lock:
+        name=validate_hashtag(name); before=discover_channels(device)
+        target=next((x for x in before["slots"] if x["index"]==slot),None)
+        if not target or target["state"] != "empty": raise RadioError("selected slot is not confirmed empty")
+        asyncio.run(_write_channel_serial(device["device"],slot,name))
+        after=discover_channels(device); verified=next((x for x in after["slots"] if x["index"]==slot),None)
+        if not verified or verified["name"] != name: raise RadioError("channel write was not verified by read-back")
+        return {"index":slot,"name":name}
 
 async def _delete_channel_serial(path, slot, expected):
     from meshcore import EventType
@@ -120,9 +126,10 @@ async def _delete_channel_serial(path, slot, expected):
 def delete_channel(device: dict | None, slot: int, expected: str) -> None:
     if not device: raise RadioError("no verified Companion device")
     if expected.strip().casefold() in {"public","#public"}: raise RadioError("Public channel is protected from deletion")
-    asyncio.run(_delete_channel_serial(device["device"],slot,expected))
-    after=discover_channels(device); verified=next((x for x in after["slots"] if x["index"]==slot),None)
-    if not verified or verified["occupied"]: raise RadioError("channel deletion was not verified by read-back")
+    with radio_lock:
+        asyncio.run(_delete_channel_serial(device["device"],slot,expected))
+        after=discover_channels(device); verified=next((x for x in after["slots"] if x["index"]==slot),None)
+        if not verified or verified["state"] != "empty": raise RadioError("channel deletion was not verified by read-back")
 
 def verify_channel(device: dict | None, selected: dict | None) -> dict:
     if not selected: raise RadioError("no transmit channel selected")
@@ -143,7 +150,7 @@ def message_limit(config: dict) -> int: return int(config.get("max_message_bytes
 
 def read_device_name(device: dict | None) -> str:
     if not device: raise RadioError("no verified Companion device")
-    return asyncio.run(_read_name(device["device"]))
+    with radio_lock: return asyncio.run(_read_name(device["device"]))
 async def _read_name(path):
     from meshcore import EventType
     radio=await _open(path)
@@ -160,7 +167,7 @@ def set_device_name(device: dict | None, name: str) -> str:
     if not device: raise RadioError("no verified Companion device")
     if not name or "\n" in name or "\r" in name or "\x00" in name:
         raise RadioError("device name must be a single non-empty line without NUL characters")
-    return asyncio.run(_set_name(device["device"],name))
+    with radio_lock: return asyncio.run(_set_name(device["device"],name))
 async def _set_name(path,name):
     from meshcore import EventType
     radio=await _open(path)
@@ -206,7 +213,7 @@ async def _send_serial(path: str, channel_index: int, message: str) -> str:
 def verify_connection(config: dict, device: dict | None) -> str:
     if not device: raise RadioError("no verified Companion device")
     if config.get("dry_run"): return "dry-run: selection resolved; serial connection intentionally not opened"
-    return asyncio.run(_verify_serial(device["device"]))
+    with radio_lock: return asyncio.run(_verify_serial(device["device"]))
 
 async def _verify_serial(path: str) -> str:
     from meshcore import EventType
