@@ -120,31 +120,35 @@ def settings():
  if request.method=="POST":
   value=request.form.get("device");db.save_setting("device",value or "null");db.save_setting("tx_channel","null")
   flash("Device selection saved. Transmit channel cleared and must be selected for this device.");return redirect(url_for("console.settings"))
+ coverage=db.coverage();coverage_states=", ".join(sorted({str(state).upper() for state in current_app.config.get("states",[])})) or "none"
  saved,dev,status=device_state(db);channels=[];channel_error=None;discovery=None;radio_name=None;name_error=None;cached_radio_name=db.setting("device_name") or ""
  if dev:
   try: discovery=discover_channels(dev);channels=[{"index":x["index"],"name":x["name"]} for x in discovery["slots"] if x["name"]]
   except RadioError as exc: channel_error=str(exc)
   try: radio_name=read_device_name(dev);db.save_setting("device_name",radio_name)
   except RadioError as exc: name_error=str(exc)
- return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,tx_enabled=bool(current_app.config.get("transmit_enabled") and os.environ.get("MESHCORE_SEND_ENABLED")=="1"),channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,radio_name=radio_name,cached_radio_name=cached_radio_name,name_error=name_error,timezones=valid_timezones(),timezone=app_timezone(db))
+ return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,tx_enabled=bool(current_app.config.get("transmit_enabled") and os.environ.get("MESHCORE_SEND_ENABLED")=="1"),coverage_count=len(coverage),coverage_states=coverage_states,channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,radio_name=radio_name,cached_radio_name=cached_radio_name,name_error=name_error,timezones=valid_timezones(),timezone=app_timezone(db))
 @bp.route("/settings/coverage-counties",methods=["GET","POST"])
 @admin
 def coverage_counties_page():
  db=current_app.extensions["db"]
+ def page(state="",query="",selected=None):
+  coverage=db.coverage();saved={r["ugc"] for r in coverage}
+  return render_template("coverage_counties.html",catalog=db.catalog(),states=db.catalog_states(),state=state,query=query,selected=saved if selected is None else set(selected),saved_selected=saved,coverage=coverage,meta=db.catalog_meta())
  if request.method=="POST":
-  action=request.form.get("action")
+  action=request.form.get("action");return_filters={"state":request.form.get("return_state",""),"q":request.form.get("return_query","")}
   try:
    if action=="import":
     rows,meta=fetch_catalog(current_app.config["nws_user_agent"]);db.replace_catalog(rows,meta);db.audit(None,"county_catalog_imported",session["user"],f"{len(rows)} counties; {meta['source']}");flash("County catalog imported. Coverage was not changed.")
    elif action=="save":
     selected=request.form.getlist("county")
     if len(selected)>25 and request.form.get("confirm_expand")!="yes": raise CatalogError("confirm this coverage expansion before saving")
-    db.save_coverage(selected,{str(x).upper() for x in current_app.config.get("states",[])});db.audit(None,"coverage_counties_saved",session["user"],f"{len(selected)} counties selected");flash("Coverage counties saved. New NWS polls and Test Alerts use them immediately.")
-  except (CatalogError,ValueError,requests.RequestException) as exc: flash(f"Coverage was not changed: {exc}")
-  return redirect(url_for("console.coverage_counties_page"))
- state=request.args.get("state","");query=request.args.get("q","");selected={r["ugc"] for r in db.coverage()}
- catalog=db.catalog(state,query)
- return render_template("coverage_counties.html",catalog=catalog,visible={r["ugc"] for r in catalog},states=db.catalog_states(),state=state,query=query,selected=selected,coverage=db.coverage(),meta=db.catalog_meta())
+    db.save_coverage(selected,{str(x).upper() for x in current_app.config.get("states",[])});db.audit(None,"coverage_counties_saved",session["user"],f"{len(selected)} counties selected");flash(f"Coverage saved: {len(selected)} counties.")
+  except (CatalogError,ValueError,requests.RequestException) as exc:
+   flash(f"Coverage was not changed: {exc}")
+   if action=="save": return page(return_filters["state"],return_filters["q"],request.form.getlist("county"))
+  return redirect(url_for("console.coverage_counties_page",**{key:value for key,value in return_filters.items() if value}))
+ return page(request.args.get("state",""),request.args.get("q",""))
 @bp.get("/api/devices")
 @admin
 def devices_api():

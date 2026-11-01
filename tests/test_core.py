@@ -241,6 +241,19 @@ def test_connection_state_is_compact_and_interlock_feedback_remains_visible(tmp_
  assert 'class="status-line"' in messaging and "TX Disabled" in messaging
  assert "Manual dispatch only. A Companion accepting" not in client.get("/").data.decode()
 
+def test_settings_promotes_coverage_counties_and_warns_when_empty(tmp_path,monkeypatch):
+ cfg=config(tmp_path);cfg["counties"]=[];app=create_app(cfg);client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ db=app.extensions["db"];db.replace_catalog([{"ugc":"ALC089","state":"AL","name":"Madison","same":"001089"}],{"source":"test"})
+ monkeypatch.setattr("dispatch.routes.device_state",lambda db: (None,None,"No Companion selected"))
+ page=client.get("/settings").data.decode()
+ assert '<h2>Coverage Counties</h2>' in page and 'class="coverage-action"' in page
+ assert "0</b> selected" in page and "Allowed states: <b>AL</b>" in page
+ assert "Live alert filtering and Test Alerts have no county coverage." in page
+ db.save_coverage(["ALC089"])
+ page=client.get("/settings").data.decode()
+ assert "1</b> selected" in page and "Live NWS filtering and Test Alerts use these selected counties." in page
+
 def test_ignore_requires_one_time_server_confirmation(tmp_path):
  app=create_app(config(tmp_path));ingest(app,[feature()]);db=app.extensions["db"];client=app.test_client()
  with client.session_transaction() as s:s["user"]="admin"
@@ -560,5 +573,25 @@ def test_coverage_page_import_state_filter_and_fail_closed_save(tmp_path,monkeyp
  page=client.get("/settings/coverage-counties?state=TN").data.decode();assert 'value="TNC103"' in page and "Lincoln, TN" in page
  client.post("/settings/coverage-counties",data={"csrf_token":token,"action":"save","county":["ALC089","TNC103"]})
  assert {r["ugc"] for r in db.coverage()}=={"ALC089","TNC103"}
- client.post("/settings/coverage-counties",data={"csrf_token":token,"action":"save"})
+ failed=client.post("/settings/coverage-counties",data={"csrf_token":token,"action":"save","return_state":"TN","return_query":"Lincoln"})
  assert {r["ugc"] for r in db.coverage()}=={"ALC089","TNC103"}
+ failed_page=failed.data.decode()
+ assert "Coverage was not changed" in failed_page and 'value="TN" selected' in failed_page
+ assert 'const saved=new Set(' in failed_page and "ALC089" in failed_page and "TNC103" in failed_page
+
+def test_coverage_selector_preserves_cross_state_pending_choices_client_side(tmp_path,monkeypatch):
+ cfg=config(tmp_path);cfg["states"]=["AL","TN"];app=create_app(cfg);db=app.extensions["db"];client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ rows=normalize_catalog({"features":[{"properties":{"id":"ALC089","name":"Madison"}},{"properties":{"id":"TNC103","name":"Lincoln"}}]})
+ db.replace_catalog(rows,{"source":"test","retrieved_at":"now","version":"v1"});db.save_coverage(["ALC089","TNC103"])
+ page=client.get("/settings/coverage-counties?state=TN").data.decode()
+ assert 'id="county-state"' in page and 'class="county-option" data-state="AL"' in page and 'class="county-option" data-state="TN"' in page
+ assert 'value="ALC089" checked' in page and 'value="TNC103" checked' in page
+ assert "state.addEventListener('change',update)" in page and "search.addEventListener('input',update)" in page
+ assert "Clear filters" in page and "pending change" in page and 'method="get"' not in page
+ assert 'class="county-option"' in page and 'name="action" value="save"' in page
+ token=page.split('name="csrf_token" value="')[1].split('"')[0]
+ response=client.post("/settings/coverage-counties",data={"csrf_token":token,"action":"save","county":["ALC089","TNC103"],"return_state":"TN","return_query":"Lincoln"})
+ assert "state=TN" in response.headers["Location"] and "q=Lincoln" in response.headers["Location"]
+ after=client.get(response.headers["Location"]).data.decode()
+ assert 'value="TN" selected' in after and 'id="county-search" type="search" value="Lincoln"' in after
