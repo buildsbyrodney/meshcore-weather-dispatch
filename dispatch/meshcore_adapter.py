@@ -30,7 +30,10 @@ def _channel_name(payload) -> str | None:
     return getattr(payload,"name",None) or getattr(payload,"channel_name",None)
 
 def _channel_secret(payload):
-    value=payload.get("secret") if isinstance(payload,dict) else getattr(payload,"secret",None)
+    # meshcore_py exposes CHANNEL_INFO as channel_name/channel_secret.
+    # Accept the older short spelling too, but never infer a missing secret.
+    value=(payload.get("channel_secret",payload.get("secret")) if isinstance(payload,dict)
+           else getattr(payload,"channel_secret",getattr(payload,"secret",None)))
     if isinstance(value,str):
         try: return bytes.fromhex(value)
         except ValueError: return None
@@ -152,16 +155,23 @@ async def _read_name(path):
     finally: await _close(radio)
 def set_device_name(device: dict | None, name: str) -> str:
     if not device: raise RadioError("no verified Companion device")
-    if not name or "\n" in name or "\r" in name: raise RadioError("device name must be a single non-empty line")
+    if not name or "\n" in name or "\r" in name or "\x00" in name:
+        raise RadioError("device name must be a single non-empty line without NUL characters")
     return asyncio.run(_set_name(device["device"],name))
 async def _set_name(path,name):
     from meshcore import EventType
     radio=await _open(path)
     try:
         info=await asyncio.wait_for(radio.commands.send_device_query(),READ_TIMEOUT); payload=info.payload or {}
+        # DEVICE_INFO has no standard device-name-length field.  Some library
+        # versions expose one; honour it when present, otherwise let the
+        # Companion/library validate the documented set_name command and
+        # require an exact SELF_INFO read-back.  We never truncate a name.
         maximum=(payload.get("max_name_len") or payload.get("max_name_length")) if isinstance(payload,dict) else None
-        if not isinstance(maximum,int): raise RadioError("firmware did not report supported device-name length")
-        if len(name.encode("utf-8"))>maximum: raise RadioError(f"device name exceeds firmware limit of {maximum} UTF-8 bytes")
+        if maximum is not None:
+            if not isinstance(maximum,int) or maximum <= 0:
+                raise RadioError("Companion reported an invalid device-name length")
+            if len(name.encode("utf-8"))>maximum: raise RadioError(f"device name exceeds firmware limit of {maximum} UTF-8 bytes")
         result=await asyncio.wait_for(radio.commands.set_name(name),READ_TIMEOUT)
         if result.type==EventType.ERROR: raise RadioError(f"Companion rejected name: {result.payload}")
     finally: await _close(radio)
