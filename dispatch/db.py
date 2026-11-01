@@ -61,7 +61,10 @@ class Database:
             c.execute("COMMIT"); return True
     def finish(self, cap_id, status, actor, detail=None, message=None):
         with self.connect() as c:
+            row=c.execute("SELECT test_only FROM alerts WHERE cap_id=?",(cap_id,)).fetchone()
             c.execute("UPDATE alerts SET status=?, updated_at=? WHERE cap_id=?", (status, now(), cap_id))
+        if row and row["test_only"]:
+            detail=f"TEST ONLY — {detail or status}"
         self.audit(cap_id, status, actor, detail, message)
     def get(self, cap_id):
         with self.connect() as c: return c.execute("SELECT * FROM alerts WHERE cap_id=?", (cap_id,)).fetchone()

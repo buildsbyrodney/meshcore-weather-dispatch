@@ -45,7 +45,7 @@ Leave `dry_run: true`, `transmit_enabled: false`, and `MESHCORE_SEND_ENABLED=0`.
 
 ### Test Alerts
 
-**Test Alerts** creates one local, synthetic CAP warning for exercising the same geographic filtering, byte shortening, audit history, and manual dispatch controls used by the NWS feed. It never contacts NWS, opens the Companion, or transmits by itself. Every generated alert, dashboard card, shortened message, and audit entry is marked **TEST ONLY**. Sending or ignoring it remains a separate operator decision, subject to the normal radio and environment interlocks.
+**Test Alerts** creates one local, synthetic CAP warning for exercising the same geographic filtering, byte shortening, audit history, and manual dispatch controls used by the NWS feed. It never contacts NWS, opens the Companion, or transmits by itself. Every generated alert, dashboard card, shortened message, and audit entry—including later send, ignore, expiration, revision, or cancellation events—is marked **TEST ONLY**. Sending or ignoring it remains a separate operator decision, subject to the normal radio and environment interlocks. Synthetic and genuine CAP revision families are kept separate even if a submitted reference names a real alert.
 
 The checkbox list is populated only from configured `counties`. Strings are shown as their configured SAME or UGC identifier. For readable county names and paired identifiers, use structured entries; several states may be represented together:
 
@@ -61,6 +61,8 @@ counties:
 ```
 
 Select one or more entries. The application stores every selected SAME/UGC code in one synthetic alert's `geocode` fields and does not split the selection into multiple alerts or radio messages. An invalid, unconfigured, or empty selection is rejected.
+
+Test Alerts has no history-clearing control. Its audit entries share the durable activity log by design; the application has no operation that deletes NWS history or radio transmission records.
 
 The NWS endpoint is polled roughly every 60 seconds. CAP `id`, `references`, `messageType`, `sent`, and `expires` are persisted. CAP-linked revisions form one related history. A normalized fingerprint prevents a new CAP ID with unchanged substantive content from becoming a duplicate actionable item. A material revision of a sent or ignored warning becomes a clearly labeled manual decision; a cancellation closes only pending revisions and never broadcasts automatically. The dashboard shows last successful synchronization, errors, and a stale-feed warning. The full NWS description is retained in SQLite while the derived radio text is capped by UTF-8 bytes.
 

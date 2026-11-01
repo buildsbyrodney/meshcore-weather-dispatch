@@ -112,6 +112,41 @@ def test_test_alert_maximum_length_keeps_test_marker_and_all_counties(tmp_path):
  assert len(alert["message"].encode("utf-8"))<=80 and alert["message"].startswith("TEST ONLY NWS")
  assert len(feature["properties"]["geocode"]["SAME"])==20
 
+def test_test_alert_revisions_and_cancel_do_not_alter_genuine_family(tmp_path):
+ cfg=config(tmp_path);cfg["counties"]=[{"name":"Madison County, AL","same":"001089","ugc":"ALC089"}]
+ app=create_app(cfg);db=app.extensions["db"];ingest(app,[feature("real")])
+ choice=coverage_counties(cfg)[0]; first=build_test_alert(cfg,[choice["id"]],"Tornado Warning")
+ # A forged reference to a real CAP ID must not join or alter that family.
+ first["properties"]["references"]="sender,real,when";ingest(app,[first])
+ update=build_test_alert(cfg,[choice["id"]],"Tornado Warning")
+ update["properties"].update({"references":f"sender,{first['properties']['id']},when","description":"TEST ONLY changed instruction"});ingest(app,[update])
+ cancel=build_test_alert(cfg,[choice["id"]],"Tornado Warning")
+ cancel["properties"].update({"references":f"sender,{update['properties']['id']},when","messageType":"Cancel"});ingest(app,[cancel])
+ assert db.get("real")["status"]=="pending"
+ assert db.get(first["properties"]["id"])["status"]=="superseded"
+ assert db.get(update["properties"]["id"])["status"]=="canceled"
+ assert db.get(cancel["properties"]["id"])["status"]=="canceled"
+ assert all("TEST ONLY" in (row["detail"] or "") for row in db.history() if row["cap_id"] != "real")
+
+def test_test_alert_creation_never_uses_radio_and_manual_comment_stays_capped(tmp_path,monkeypatch):
+ cfg=config(tmp_path);cfg["max_message_bytes"]=120;cfg["counties"]=[{"name":"Madison County, AL","same":"001089","ugc":"ALC089"}]
+ app=create_app(cfg);db=app.extensions["db"];client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ monkeypatch.setattr("dispatch.routes.send",lambda *a: (_ for _ in ()).throw(AssertionError("test-alert creation must not send")))
+ monkeypatch.setattr("dispatch.routes.verify_channel",lambda *a: (_ for _ in ()).throw(AssertionError("test-alert creation must not verify radio")))
+ token=client.get("/test-alerts").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
+ choice=coverage_counties(cfg)[0]
+ client.post("/test-alerts",data={"csrf_token":token,"event":"Tornado Warning","county":choice["id"]})
+ alert=db.actionable()[0];captured=[]
+ monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/fake"},"Connected"))
+ monkeypatch.setattr("dispatch.routes.verify_channel",lambda *a:None)
+ monkeypatch.setattr("dispatch.routes.send",lambda config,device,channel,message: captured.append(message) or "dry-run")
+ db.save_setting("tx_channel",'{"index":1,"name":"#bench"}')
+ page=client.get("/").data.decode();token=page.split('name="csrf_token" value="')[1].split('"')[0]
+ client.post(f"/alerts/{alert['cap_id']}/send",data={"csrf_token":token,"comment":"é"*100})
+ assert len(captured)==1 and len(captured[0].encode("utf-8"))<=120 and captured[0].startswith("TEST ONLY")
+ assert "TEST ONLY" in db.history()[0]["detail"]
+
 def test_dry_run_send_is_audited(tmp_path,monkeypatch):
  app=create_app(config(tmp_path)); ingest(app,[feature()]); client=app.test_client()
  with client.session_transaction() as s: s["user"]="admin"
