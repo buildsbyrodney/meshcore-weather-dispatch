@@ -296,7 +296,7 @@ def test_local_time_has_zone_abbreviation():
  assert compact_local_time("2026-01-01T18:30:00+00:00","America/Chicago").endswith("CST")
 
 def test_compact_alert_row_shows_event_once_and_keeps_comment_in_modal(tmp_path):
- cfg=config(tmp_path);cfg["max_message_bytes"]=180;app=create_app(cfg);ingest(app,[feature()]);client=app.test_client()
+ cfg=config(tmp_path);cfg["max_message_bytes"]=180;cfg["timezone"]="America/Chicago";app=create_app(cfg);ingest(app,[feature()]);client=app.test_client()
  with client.session_transaction() as s:s["user"]="admin"
  row=client.get("/api/state").get_json()["alerts_html"]
  collapsed=row.split("<details>",1)[0]
