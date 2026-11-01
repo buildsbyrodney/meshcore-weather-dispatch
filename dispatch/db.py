@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS audit (
 );
 CREATE INDEX IF NOT EXISTS idx_alert_status ON alerts(status, sent DESC);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS test_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT, channel_name TEXT, channel_index INTEGER, message TEXT, outcome TEXT, detail TEXT, created_at TEXT NOT NULL);
 '''
 
 def now() -> str: return datetime.now(timezone.utc).isoformat()
@@ -69,3 +70,7 @@ class Database:
     def setting(self, key):
         with self.connect() as c:
             row=c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone(); return row[0] if row else None
+    def test_message(self, actor, channel, message, outcome, detail):
+        with self.connect() as c: c.execute("INSERT INTO test_messages(actor,channel_name,channel_index,message,outcome,detail,created_at) VALUES(?,?,?,?,?,?,?)",(actor,channel["name"],channel["index"],message,outcome,detail,now()))
+    def test_history(self):
+        with self.connect() as c: return c.execute("SELECT * FROM test_messages ORDER BY id DESC LIMIT 100").fetchall()

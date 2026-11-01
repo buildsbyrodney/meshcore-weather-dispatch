@@ -67,7 +67,17 @@ Before starting, optionally make a separate backup of the only two local state f
 
 Open Settings as an administrator and choose **Detect devices**. The scan reads `/dev/serial/by-id` and serial descriptors; it does not open or change any device. Pick a result and test it. On success, the application stores both the selected stable `/dev/serial/by-id/...` path and USB identity (VID, PID, serial number). At reconnect it resolves the by-id path first, then only a unique matching USB identity. Zero matches means disconnected; multiple matches means ambiguous. It will never guess and select a different radio. Remove or change the device in Settings without stopping NWS polling.
 
-`dispatch/meshcore_adapter.py` uses the official [`meshcore`](https://github.com/meshcore-dev/meshcore_py) Python library’s serial transport and `send_chan_msg(channel_index, message)` command. It requires both `MESHCORE_SEND_ENABLED=1` and `transmit_enabled: true`; dry-run mode never opens a serial connection. Set `channel_index` to an already configured Companion channel slot. The application never creates or changes channels. Verify the exact library/firmware pairing on a bench radio before enabling production transmissions.
+`dispatch/meshcore_adapter.py` uses the official [`meshcore`](https://github.com/meshcore-dev/meshcore_py) Python library’s serial transport and `send_chan_msg(channel_index, message)` command. It requires both `MESHCORE_SEND_ENABLED=1` and `transmit_enabled: true`; dry-run prevents all message sends but still permits read-only device/channel queries. The application never creates or changes channels except through the separately confirmed Manage Channels action. Verify the exact library/firmware pairing on a bench radio before enabling production transmissions.
+
+### Channel and time-zone settings
+
+Settings can query a selected-but-unsaved detected Companion using a read-only connection. Saving the device still requires an explicit action and preserves the stable USB identity check. The **Manage Channels** area reads the device-reported capacity and every slot. It only offers slots confirmed empty; unknown/error slots are never candidates for writing.
+
+Adding a hashtag channel is an explicit administrative configuration action—not a weather dispatch. Enter a public hashtag, choose a confirmed empty slot, tick the confirmation box, and submit. The app derives the documented 16-byte hashtag key from the first 16 bytes of `SHA-256(channel name)`, writes exactly that slot, then reads it back. It never deletes, replaces, renames, or creates channels in the background. Any channel configuration write clears the saved transmit choice, requiring an administrator to select and revalidate it again.
+
+Deleting a channel is similarly explicit: the administrator must confirm the exact name and slot. The Companion is re-read immediately before the documented clear operation (empty name plus zero 16-byte secret) and the slot table is re-read afterward. The Public channel has no Delete control, and the selected transmit channel must be deselected before deletion. Deletion removes that channel configuration from the Companion; it cannot be undone without recreating it and does not affect other slots.
+
+Select any valid IANA time zone in Settings. The application saves this independently of the operating system and renders NWS times, sync time, and activity history in that zone with daylight-saving transitions applied. Timestamps remain stored in UTC.
 
 ## Limits
 
