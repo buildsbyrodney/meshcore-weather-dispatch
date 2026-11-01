@@ -14,9 +14,30 @@ def cap_reference_ids(references) -> list[str]:
     if not isinstance(references, str): return []
     return [parts[1].strip() for item in references.split() if len(parts := item.strip().split(",")) >= 2 and parts[1].strip()]
 
+def _codes(value):
+    values=value if isinstance(value,(list,tuple)) else [value]
+    return [normalize_geo_code(str(code).rstrip("/").rsplit("/",1)[-1]) for code in values if str(code).strip()]
+
+def coverage_counties(cfg) -> list[dict]:
+    """Return configured coverage choices without inventing county identities."""
+    choices=[]; seen=set()
+    for value in cfg.get("counties",[]):
+        if isinstance(value,dict):
+            same=_codes(value.get("same",value.get("SAME",[])))
+            ugc=_codes(value.get("ugc",value.get("UGC",[])))
+            label=str(value.get("name") or " / ".join(same+ugc)).strip()
+        else:
+            code=_codes(value); same=[x for x in code if x.isdigit()]; ugc=[x for x in code if not x.isdigit()]
+            label=" / ".join(same+ugc)
+        if not label or not (same or ugc): continue
+        key="same:"+",".join(sorted(same))+"|ugc:"+",".join(sorted(ugc))
+        if key in seen: continue
+        seen.add(key); choices.append({"id":key,"label":label,"same":same,"ugc":ugc})
+    return choices
+
 def configured_counties(cfg) -> set[str]:
     """Accept NWS SAME FIPS, UGC codes, and the final segment of an NWS URL."""
-    return {normalize_geo_code(str(value).rstrip("/").rsplit("/",1)[-1]) for value in cfg.get("counties",[]) if str(value).strip()}
+    return {code for county in coverage_counties(cfg) for code in county["same"]+county["ugc"]}
 
 def normalize_geo_code(value: str) -> str:
     value=value.upper()
@@ -72,8 +93,10 @@ def ingest(app, features):
                     status="pending"
                     label="Updated Warning — Previously Sent" if "sent" in prior_statuses else ("Updated Warning — Previously Ignored" if "ignored" in prior_statuses else ("Updated Warning" if prior_rows else "New Warning"))
             if iso_past(p.get("expires")): status="expired"
+            test_only=bool(p.get("test_only"))
+            if test_only: label=f"TEST ONLY — {label}"
             message=radio_message(f,cfg.get("max_message_bytes",180))
-            c.execute("INSERT INTO alerts(cap_id,family_id,content_hash,revision_label,event,headline,description,areas,sent,effective,expires,status,message,replaces_id,raw_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(cap_id,family_id,fingerprint,label,p.get("event",""),p.get("headline"),p.get("description"),p.get("areaDesc"),p.get("sent"),p.get("effective"),p.get("expires"),status,message,references[0] if references else None,json.dumps(f),now(),now()))
+            c.execute("INSERT INTO alerts(cap_id,family_id,content_hash,revision_label,event,headline,description,areas,sent,effective,expires,status,message,replaces_id,raw_json,test_only,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(cap_id,family_id,fingerprint,label,p.get("event",""),p.get("headline"),p.get("description"),p.get("areaDesc"),p.get("sent"),p.get("effective"),p.get("expires"),status,message,references[0] if references else None,json.dumps(f),int(test_only),now(),now()))
             c.execute("INSERT INTO audit(cap_id,action,detail,message,created_at) VALUES(?,?,?,?,?)",(cap_id,status,label,message,now()))
     with db.connect() as c:
         rows=c.execute("SELECT cap_id FROM alerts WHERE status='pending' AND expires IS NOT NULL AND expires <= ?",(now(),)).fetchall()

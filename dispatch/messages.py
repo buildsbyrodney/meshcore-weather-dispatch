@@ -14,7 +14,8 @@ def radio_message(feature: dict, byte_cap: int) -> str:
     areas = props.get("areaDesc", "configured area")
     ends = props.get("expires", "")
     instruction = re.sub(r"\s+", " ", props.get("instruction") or props.get("description") or "").strip()
-    return truncate_utf8(f"NWS {event}: {areas}. Until {ends}. {instruction}", byte_cap)
+    prefix="TEST ONLY NWS" if props.get("test_only") else "NWS"
+    return truncate_utf8(f"{prefix} {event}: {areas}. Until {ends}. {instruction}", byte_cap)
 
 def append_comment(base: str, comment: str, byte_cap: int) -> str:
     comment = " ".join(comment.split())

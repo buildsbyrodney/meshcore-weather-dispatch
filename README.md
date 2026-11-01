@@ -43,6 +43,25 @@ Leave `dry_run: true`, `transmit_enabled: false`, and `MESHCORE_SEND_ENABLED=0`.
 
 `states` accepts NWS two-letter state codes. `counties` accepts NWS SAME six-digit codes (for example `001089`; shorter numeric input is normalized), UGC county codes (for example `ALC089`), or an NWS URL ending in either code. The filter checks the NWS JSON `geocode.SAME` and `geocode.UGC` values; it intentionally does not inspect polygons, so missing geometry is safe. An alert affecting several counties matches when any configured county matches. Empty county list means all alerts returned by a state feed. `alert_types` is an allowlist. Select exactly one existing regional transmit channel by name in Settings; the application records its radio slot but never changes the radio configuration.
 
+### Test Alerts
+
+**Test Alerts** creates one local, synthetic CAP warning for exercising the same geographic filtering, byte shortening, audit history, and manual dispatch controls used by the NWS feed. It never contacts NWS, opens the Companion, or transmits by itself. Every generated alert, dashboard card, shortened message, and audit entry is marked **TEST ONLY**. Sending or ignoring it remains a separate operator decision, subject to the normal radio and environment interlocks.
+
+The checkbox list is populated only from configured `counties`. Strings are shown as their configured SAME or UGC identifier. For readable county names and paired identifiers, use structured entries; several states may be represented together:
+
+```yaml
+states: [AL, TN]
+counties:
+  - name: Madison County, AL
+    same: "001089"
+    ugc: ALC089
+  - name: Lincoln County, TN
+    same: "047103"
+    ugc: TNC103
+```
+
+Select one or more entries. The application stores every selected SAME/UGC code in one synthetic alert's `geocode` fields and does not split the selection into multiple alerts or radio messages. An invalid, unconfigured, or empty selection is rejected.
+
 The NWS endpoint is polled roughly every 60 seconds. CAP `id`, `references`, `messageType`, `sent`, and `expires` are persisted. CAP-linked revisions form one related history. A normalized fingerprint prevents a new CAP ID with unchanged substantive content from becoming a duplicate actionable item. A material revision of a sent or ignored warning becomes a clearly labeled manual decision; a cancellation closes only pending revisions and never broadcasts automatically. The dashboard shows last successful synchronization, errors, and a stale-feed warning. The full NWS description is retained in SQLite while the derived radio text is capped by UTF-8 bytes.
 
 ## Upgrade an existing Raspberry Pi installation
