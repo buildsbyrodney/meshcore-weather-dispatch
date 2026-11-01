@@ -241,6 +241,19 @@ def test_connection_state_is_compact_and_interlock_feedback_remains_visible(tmp_
  assert 'class="status-line"' in messaging and "TX Disabled" in messaging
  assert "Manual dispatch only. A Companion accepting" not in client.get("/").data.decode()
 
+def test_settings_promotes_coverage_counties_and_warns_when_empty(tmp_path,monkeypatch):
+ cfg=config(tmp_path);cfg["counties"]=[];app=create_app(cfg);client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ db=app.extensions["db"];db.replace_catalog([{"ugc":"ALC089","state":"AL","name":"Madison","same":"001089"}],{"source":"test"})
+ monkeypatch.setattr("dispatch.routes.device_state",lambda db: (None,None,"No Companion selected"))
+ page=client.get("/settings").data.decode()
+ assert '<h2>Coverage Counties</h2>' in page and 'class="coverage-action"' in page
+ assert "0</b> selected" in page and "Allowed states: <b>AL</b>" in page
+ assert "Live alert filtering and Test Alerts have no county coverage." in page
+ db.save_coverage(["ALC089"])
+ page=client.get("/settings").data.decode()
+ assert "1</b> selected" in page and "Live NWS filtering and Test Alerts use these selected counties." in page
+
 def test_ignore_requires_one_time_server_confirmation(tmp_path):
  app=create_app(config(tmp_path));ingest(app,[feature()]);db=app.extensions["db"];client=app.test_client()
  with client.session_transaction() as s:s["user"]="admin"

@@ -120,13 +120,14 @@ def settings():
  if request.method=="POST":
   value=request.form.get("device");db.save_setting("device",value or "null");db.save_setting("tx_channel","null")
   flash("Device selection saved. Transmit channel cleared and must be selected for this device.");return redirect(url_for("console.settings"))
+ coverage=db.coverage();coverage_states=", ".join(sorted({str(state).upper() for state in current_app.config.get("states",[])})) or "none"
  saved,dev,status=device_state(db);channels=[];channel_error=None;discovery=None;radio_name=None;name_error=None;cached_radio_name=db.setting("device_name") or ""
  if dev:
   try: discovery=discover_channels(dev);channels=[{"index":x["index"],"name":x["name"]} for x in discovery["slots"] if x["name"]]
   except RadioError as exc: channel_error=str(exc)
   try: radio_name=read_device_name(dev);db.save_setting("device_name",radio_name)
   except RadioError as exc: name_error=str(exc)
- return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,tx_enabled=bool(current_app.config.get("transmit_enabled") and os.environ.get("MESHCORE_SEND_ENABLED")=="1"),channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,radio_name=radio_name,cached_radio_name=cached_radio_name,name_error=name_error,timezones=valid_timezones(),timezone=app_timezone(db))
+ return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,tx_enabled=bool(current_app.config.get("transmit_enabled") and os.environ.get("MESHCORE_SEND_ENABLED")=="1"),coverage_count=len(coverage),coverage_states=coverage_states,channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,radio_name=radio_name,cached_radio_name=cached_radio_name,name_error=name_error,timezones=valid_timezones(),timezone=app_timezone(db))
 @bp.route("/settings/coverage-counties",methods=["GET","POST"])
 @admin
 def coverage_counties_page():
