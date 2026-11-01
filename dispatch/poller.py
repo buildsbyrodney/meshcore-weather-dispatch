@@ -20,6 +20,9 @@ def _codes(value):
 
 def coverage_counties(cfg) -> list[dict]:
     """Return configured coverage choices without inventing county identities."""
+    db=cfg.get("coverage_db")
+    if db is not None:
+        return [{"id":f"same:{r['same']}|ugc:{r['ugc']}","label":f"{r['name']}, {r['state']}","same":[r["same"]],"ugc":[r["ugc"]]} for r in db.coverage()]
     choices=[]; seen=set()
     for value in cfg.get("counties",[]):
         if isinstance(value,dict):
@@ -49,7 +52,8 @@ def eligible(feature, cfg):
     p=feature["properties"]
     if p.get("event") not in cfg.get("alert_types", []): return False
     counties=configured_counties(cfg)
-    if not counties: return True
+    # An empty selected coverage list is fail-closed; it never means all counties.
+    if not counties: return False
     geocode=p.get("geocode") or {}
     # A null/missing geometry is immaterial: no polygon parsing is performed.
     codes={normalize_geo_code(str(code)) for code in (geocode.get("SAME") or [])+(geocode.get("UGC") or [])}

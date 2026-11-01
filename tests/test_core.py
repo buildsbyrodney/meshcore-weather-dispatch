@@ -8,15 +8,16 @@ from dispatch.devices import resolve_device
 from dispatch.poller import ingest, fetch, eligible, cap_reference_ids
 from dispatch.poller import coverage_counties
 from dispatch.test_alerts import build_test_alert
+from dispatch.coverage import normalize_catalog
 import dispatch.meshcore_adapter as adapter
 from dispatch.meshcore_adapter import RadioError, verify_channel, hashtag_secret, validate_hashtag, set_device_name
 from dispatch.timefmt import local_time
 
 def config(tmp_path):
- return {"TESTING":True,"secret_key":"test","database":str(tmp_path/"test.sqlite"),"admin_username":"admin","admin_password_hash":"scrypt:32768:8:1$X$C8YciwLCAazhj6PeXTvoUHl0LTB7qm4JzB47lqYsOiwD9sEzKJzQx9QHdT1yTQ","nws_user_agent":"tests@example.invalid","states":["AL"],"alert_types":["Tornado Warning"],"counties":[],"max_message_bytes":80,"dry_run":True,"transmit_enabled":False,"poll_seconds":60,"start_poller":False}
+ return {"TESTING":True,"secret_key":"test","database":str(tmp_path/"test.sqlite"),"admin_username":"admin","admin_password_hash":"scrypt:32768:8:1$X$C8YciwLCAazhj6PeXTvoUHl0LTB7qm4JzB47lqYsOiwD9sEzKJzQx9QHdT1yTQ","nws_user_agent":"tests@example.invalid","states":["AL"],"alert_types":["Tornado Warning"],"counties":[{"name":"Madison County, AL","same":"001089","ugc":"ALC089"}],"max_message_bytes":80,"dry_run":True,"transmit_enabled":False,"poll_seconds":60,"start_poller":False}
 
 def feature(alert_id="new", refs="", kind="Alert", description="Shelter now", expires="2099-01-01T00:00:00+00:00"):
- return {"properties":{"id":alert_id,"event":"Tornado Warning","areaDesc":"Madison","headline":"Tornado warning","sent":"2026-01-01T00:00:00+00:00","expires":expires,"description":description,"messageType":kind,"references":refs}}
+ return {"properties":{"id":alert_id,"event":"Tornado Warning","areaDesc":"Madison","headline":"Tornado warning","sent":"2026-01-01T00:00:00+00:00","expires":expires,"description":description,"messageType":kind,"references":refs,"geocode":{"SAME":["001089"],"UGC":["ALC089"]}}}
 
 def test_utf8_cap_and_marked_comment():
  text=append_comment("A", "é"*100, 20); assert len(text.encode())<=20 and "[OPERATOR:" in text
@@ -423,3 +424,27 @@ def test_device_name_readback_mismatch_reports_actual_radio_name(monkeypatch):
  except RadioError as error:
   assert "W4OWE-BOT" in str(error) and "OWE-WX-TEST" in str(error)
  else: assert False, "an unverified rename must not be reported as saved"
+
+def test_county_catalog_import_validation_and_coverage_persistence(tmp_path):
+ app=create_app(config(tmp_path));db=app.extensions["db"]
+ rows=normalize_catalog({"features":[{"properties":{"id":"ALC089","name":"Madison"}},{"properties":{"id":"TNC103","name":"Lincoln"}}]})
+ db.replace_catalog(rows,{"source":"official-test","retrieved_at":"now","version":"v1"})
+ db.save_coverage(["ALC089","TNC103"])
+ assert [r["ugc"] for r in db.coverage()]==["ALC089","TNC103"] and db.catalog_meta()["version"]=="v1"
+ try: db.replace_catalog([],{})
+ except ValueError: pass
+ else: assert False
+ assert len(db.catalog())==2 and eligible({"properties":{"event":"Tornado Warning","geocode":{"UGC":["TNC103"]}}},app.config)
+
+def test_coverage_page_import_state_filter_and_fail_closed_save(tmp_path,monkeypatch):
+ app=create_app(config(tmp_path));db=app.extensions["db"];client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ rows=normalize_catalog({"features":[{"properties":{"id":"ALC089","name":"Madison"}},{"properties":{"id":"TNC103","name":"Lincoln"}}]})
+ monkeypatch.setattr("dispatch.routes.fetch_catalog",lambda ua:(rows,{"source":"official","retrieved_at":"today","version":"v1"}))
+ token=client.get("/settings/coverage-counties").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
+ client.post("/settings/coverage-counties",data={"csrf_token":token,"action":"import"})
+ page=client.get("/settings/coverage-counties?state=TN").data.decode();assert 'value="TNC103"' in page and 'value="ALC089"' not in page
+ client.post("/settings/coverage-counties",data={"csrf_token":token,"action":"save","county":["ALC089","TNC103"]})
+ assert {r["ugc"] for r in db.coverage()}=={"ALC089","TNC103"}
+ client.post("/settings/coverage-counties",data={"csrf_token":token,"action":"save"})
+ assert {r["ugc"] for r in db.coverage()}=={"ALC089","TNC103"}
