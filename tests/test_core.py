@@ -1,9 +1,13 @@
+import asyncio
+import sys
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 from dispatch import create_app
 from dispatch.messages import append_comment, truncate_utf8
 from dispatch.devices import resolve_device
 from dispatch.poller import ingest, fetch, eligible, cap_reference_ids
-from dispatch.meshcore_adapter import RadioError, verify_channel, hashtag_secret, validate_hashtag
+import dispatch.meshcore_adapter as adapter
+from dispatch.meshcore_adapter import RadioError, verify_channel, hashtag_secret, validate_hashtag, set_device_name
 from dispatch.timefmt import local_time
 
 def config(tmp_path):
@@ -209,5 +213,106 @@ def test_device_name_change_is_explicit_and_persists(tmp_path,monkeypatch):
  monkeypatch.setattr("dispatch.routes.discover_channels",lambda d:{"capacity":4,"slots":[]})
  monkeypatch.setattr("dispatch.routes.set_device_name",lambda d,n:n)
  token=client.get("/settings").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
- client.post("/settings/device-name",data={"csrf_token":token,"name":"WXALERT"})
+ response=client.post("/settings/device-name",data={"csrf_token":token,"name":"WXALERT"},follow_redirects=True)
  assert db.setting("device_name")=="WXALERT"
+ assert "requested &#39;WXALERT&#39;; radio now reports &#39;WXALERT&#39;" in response.data.decode()
+
+def test_xiao_unknown_channel_replies_are_not_counted_as_occupied_or_empty(monkeypatch):
+ class EventType: ERROR="error"; OK="ok"
+ class Event:
+  def __init__(self,type,payload): self.type=type;self.payload=payload
+ class Commands:
+  async def send_device_query(self): return Event(EventType.OK,{"max_channels":40})
+  async def get_channel(self,index):
+   if index==0: return Event(EventType.OK,{"channel_name":"Public","channel_secret":bytes.fromhex("8b3387e9c5cdea6ac9e5edbaa115cd72")})
+   if index==1: return Event(EventType.OK,{"channel_name":"#myreach","channel_secret":bytes([1])*16})
+   if index==39: return Event(EventType.ERROR,{"code":"not_found"})
+   return Event(EventType.OK,{"channel_name":"","channel_secret":bytes(16)})
+ class Radio:
+  commands=Commands()
+  async def disconnect(self): pass
+ class MeshCore:
+  @staticmethod
+  async def create_serial(path): return Radio()
+ monkeypatch.setitem(sys.modules,"meshcore",SimpleNamespace(MeshCore=MeshCore,EventType=EventType))
+ discovery=asyncio.run(adapter._slots_serial("/dev/fake"))
+ assert discovery["capacity"]==40
+ assert [slot["state"] for slot in discovery["slots"]].count("occupied")==2
+ assert [slot["state"] for slot in discovery["slots"]].count("empty")==37
+ assert [slot["state"] for slot in discovery["slots"]].count("unknown")==1
+ assert not discovery["slots"][2]["occupied"] and discovery["slots"][2]["known"]
+ assert discovery["slots"][39]["state"]=="unknown" and not discovery["slots"][39]["occupied"]
+
+def test_settings_shows_radio_name_slot_states_and_delete_for_non_public(tmp_path,monkeypatch):
+ app=create_app(config(tmp_path));client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ slots=[{"index":0,"name":"Public","occupied":True,"known":True,"state":"occupied"},{"index":1,"name":"#myreach","occupied":True,"known":True,"state":"occupied"}]
+ slots.extend({"index":i,"name":"","occupied":False,"known":False,"state":"unknown"} for i in range(2,40))
+ monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/x"},"Connected"))
+ monkeypatch.setattr("dispatch.routes.discover_channels",lambda dev:{"capacity":40,"slots":slots})
+ monkeypatch.setattr("dispatch.routes.read_device_name",lambda dev:"WXALERT")
+ page=client.get("/settings").data.decode()
+ assert "2 occupied, 0 confirmed available, 38 unknown" in page
+ assert "Current radio name (read from the connected Companion): <b>WXALERT</b>" in page
+ assert 'value="WXALERT"' in page and "unknown (not eligible for changes)" in page
+ assert page.count(">Delete</button>")==1 and "Confirm delete #myreach (slot 1)" in page
+
+def test_device_name_uses_readback_when_firmware_omits_a_name_limit(monkeypatch):
+ state={"name":"OLD"}
+ created=[]
+ class EventType: ERROR="error"; OK="ok"
+ class Event:
+  def __init__(self,type,payload=None): self.type=type;self.payload=payload or {}
+ class Commands:
+  async def send_device_query(self): return Event(EventType.OK,{"max_channels":40})
+  async def set_name(self,name): state["name"]=name; return Event(EventType.OK)
+  async def send_appstart(self): return Event(EventType.OK,{"name":state["name"]})
+ class Radio:
+  commands=Commands()
+  async def disconnect(self): pass
+ class MeshCore:
+  @staticmethod
+  async def create_serial(path):
+   radio=Radio();created.append(radio);return radio
+ monkeypatch.setitem(sys.modules,"meshcore",SimpleNamespace(MeshCore=MeshCore,EventType=EventType))
+ assert set_device_name({"device":"/dev/fake"},"WXALERT")=="WXALERT"
+ assert state["name"]=="WXALERT" and len(created)>=2 # write session, then fresh read-back session
+
+def test_device_name_rejected_by_companion_is_reported(monkeypatch):
+ class EventType: ERROR="error"; OK="ok"
+ class Event:
+  def __init__(self,type,payload=None): self.type=type;self.payload=payload or {}
+ class Commands:
+  async def send_appstart(self): return Event(EventType.OK,{"name":"W4OWE-BOT"})
+  async def send_device_query(self): return Event(EventType.OK,{"max_channels":40})
+  async def set_name(self,name): return Event(EventType.ERROR,{"code":"illegal_arg"})
+ class Radio:
+  commands=Commands()
+  async def disconnect(self): pass
+ class MeshCore:
+  @staticmethod
+  async def create_serial(path): return Radio()
+ monkeypatch.setitem(sys.modules,"meshcore",SimpleNamespace(MeshCore=MeshCore,EventType=EventType))
+ try: set_device_name({"device":"/dev/fake"},"OWE-WX-TEST")
+ except RadioError as error: assert "Companion rejected name" in str(error)
+ else: assert False, "a rejected set_name command must not be reported as saved"
+
+def test_device_name_readback_mismatch_reports_actual_radio_name(monkeypatch):
+ class EventType: ERROR="error"; OK="ok"
+ class Event:
+  def __init__(self,type,payload=None): self.type=type;self.payload=payload or {}
+ class Commands:
+  async def send_appstart(self): return Event(EventType.OK,{"name":"W4OWE-BOT"})
+  async def send_device_query(self): return Event(EventType.OK,{"max_channels":40})
+  async def set_name(self,name): return Event(EventType.OK)
+ class Radio:
+  commands=Commands()
+  async def disconnect(self): pass
+ class MeshCore:
+  @staticmethod
+  async def create_serial(path): return Radio()
+ monkeypatch.setitem(sys.modules,"meshcore",SimpleNamespace(MeshCore=MeshCore,EventType=EventType))
+ try: set_device_name({"device":"/dev/fake"},"OWE-WX-TEST")
+ except RadioError as error:
+  assert "W4OWE-BOT" in str(error) and "OWE-WX-TEST" in str(error)
+ else: assert False, "an unverified rename must not be reported as saved"

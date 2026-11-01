@@ -71,11 +71,46 @@ Open Settings as an administrator and choose **Detect devices**. The scan reads 
 
 ### Channel and time-zone settings
 
-Settings can query a selected-but-unsaved detected Companion using a read-only connection. Saving the device still requires an explicit action and preserves the stable USB identity check. The **Manage Channels** area reads the device-reported capacity and every slot. It only offers slots confirmed empty; unknown/error slots are never candidates for writing.
+Settings can query a selected-but-unsaved detected Companion using a read-only connection. Saving the device still requires an explicit action and preserves the stable USB identity check. The **Manage Channels** area reads the device-reported capacity and every slot. It reports three distinct states: **occupied**, **confirmed available** (an empty name with a returned all-zero 16-byte secret), and **unknown**. It only offers confirmed-empty slots; an error or incomplete payload is unknown and is never a candidate for writing or deletion. The official Python library calls the channel fields `channel_name` and `channel_secret`; this application reads those actual fields (while retaining compatibility with the older short spellings). If a firmware/library pair instead returns an error or incomplete payload for an unused slot, it remains unknown rather than being counted as occupied or available.
 
 Adding a hashtag channel is an explicit administrative configuration action—not a weather dispatch. Enter a public hashtag, choose a confirmed empty slot, tick the confirmation box, and submit. The app derives the documented 16-byte hashtag key from the first 16 bytes of `SHA-256(channel name)`, writes exactly that slot, then reads it back. It never deletes, replaces, renames, or creates channels in the background. Any channel configuration write clears the saved transmit choice, requiring an administrator to select and revalidate it again.
 
-Deleting a channel is similarly explicit: the administrator must confirm the exact name and slot. The Companion is re-read immediately before the documented clear operation (empty name plus zero 16-byte secret) and the slot table is re-read afterward. The Public channel has no Delete control, and the selected transmit channel must be deselected before deletion. Deletion removes that channel configuration from the Companion; it cannot be undone without recreating it and does not affect other slots.
+Deleting a channel is similarly explicit: a Delete button appears only for a confirmed occupied, non-Public channel. The administrator must confirm the exact name and slot in both the page and browser confirmation. The Companion is re-read immediately before the documented clear operation (empty name plus zero 16-byte secret) and the slot table is re-read afterward. The Public channel has no Delete control, and the selected transmit channel must be deselected before deletion. Deletion removes that channel configuration from the Companion; it cannot be undone without recreating it and does not affect other slots.
+
+The **Device Name** field is populated from the Companion's read-only `SELF_INFO` response whenever it is available; a saved application value is never presented as a live radio value when that read fails. Saving first performs `APP_START`, then uses the official library's `set_name()` command (`CMD_SET_ADVERT_NAME`, byte `0x08`). The Companion must return `OK`, and a new serial session must return the exact requested name in `SELF_INFO` before the console reports success. The firmware implementation persists this command with `savePrefs()`, so a verified name survives a Companion reboot; the app's separate-session read-back and tests cover the reconnect path. Current documented `DEVICE_INFO` payloads do not advertise a universal name-length limit. The firmware may truncate an oversized command while returning `OK`, so the application never silently accepts truncation: it reports both the requested and actual radio name as an unverified failure. It honours an optional library-reported limit when available.
+
+### Safe Companion diagnostics for an unknown slot state
+
+If a tested Companion reports unknown slots, collect a read-only, redacted diagnostic before changing configuration. Replace the device path with the selected stable `/dev/serial/by-id/...` path. This sends only `APP_START`, `DEVICE_QUERY`, and `GET_CHANNEL`; it does not print channel secrets, transmit, write, delete, or change any radio setting.
+
+```bash
+sudo -u weatherdispatch -H /opt/meshcore-weather-dispatch/.venv/bin/python - /dev/serial/by-id/REPLACE-WITH-SELECTED-DEVICE <<'PY'
+import asyncio, sys
+from meshcore import MeshCore, EventType
+
+async def main(path):
+    radio = await MeshCore.create_serial(path)
+    try:
+        self_info = await radio.commands.send_appstart()
+        info = await radio.commands.send_device_query()
+        payload = info.payload if isinstance(info.payload, dict) else {}
+        self_payload = self_info.payload if isinstance(self_info.payload, dict) else {}
+        print({"self_info_event": str(self_info.type), "name": self_payload.get("name", "")})
+        print({"device_info_event": str(info.type), "max_channels": payload.get("max_channels"), "model": payload.get("model"), "version": payload.get("ver") or payload.get("version")})
+        count = payload.get("max_channels")
+        if not isinstance(count, int):
+            return
+        for slot in range(count):
+            result = await radio.commands.get_channel(slot)
+            channel = result.payload if isinstance(result.payload, dict) else {}
+            secret = channel.get("channel_secret", channel.get("secret"))
+            print({"slot": slot, "event": str(result.type), "name": channel.get("name") or channel.get("channel_name", ""), "has_16_byte_secret": isinstance(secret, (bytes, bytearray)) and len(secret) == 16})
+    finally:
+        await radio.disconnect()
+
+asyncio.run(main(sys.argv[1]))
+PY
+```
 
 Select any valid IANA time zone in Settings. The application saves this independently of the operating system and renders NWS times, sync time, and activity history in that zone with daylight-saving transitions applied. Timestamps remain stored in UTC.
 

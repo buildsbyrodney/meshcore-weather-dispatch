@@ -18,8 +18,8 @@ async def _close(radio):
             pass
 
 async def _open(path: str):
-    from meshcore import MeshCore
     try:
+        from meshcore import MeshCore
         return await asyncio.wait_for(MeshCore.create_serial(path), READ_TIMEOUT)
     except PermissionError as exc: raise RadioError("serial permission denied; add weatherdispatch to the dialout group") from exc
     except asyncio.TimeoutError as exc: raise RadioError("Companion connection timed out") from exc
@@ -30,7 +30,10 @@ def _channel_name(payload) -> str | None:
     return getattr(payload,"name",None) or getattr(payload,"channel_name",None)
 
 def _channel_secret(payload):
-    value=payload.get("secret") if isinstance(payload,dict) else getattr(payload,"secret",None)
+    # meshcore_py exposes CHANNEL_INFO as channel_name/channel_secret.
+    # Accept the older short spelling too, but never infer a missing secret.
+    value=(payload.get("channel_secret",payload.get("secret")) if isinstance(payload,dict)
+           else getattr(payload,"channel_secret",getattr(payload,"secret",None)))
     if isinstance(value,str):
         try: return bytes.fromhex(value)
         except ValueError: return None
@@ -49,13 +52,13 @@ async def _slots_serial(path: str) -> dict:
         for index in range(count):
             result=await asyncio.wait_for(radio.commands.get_channel(index), READ_TIMEOUT)
             if result.type == EventType.ERROR:
-                slots.append({"index":index,"name":"","occupied":True,"known":False});continue
+                slots.append({"index":index,"name":"","occupied":False,"known":False,"state":"unknown"});continue
             name=str(_channel_name(result.payload) or "")
             secret=_channel_secret(result.payload)
             # Unknown secret state is deliberately not considered available.
             known=secret is not None
             occupied=bool(name) or not known or any(secret)
-            slots.append({"index":index,"name":name,"occupied":occupied,"known":known})
+            slots.append({"index":index,"name":name,"occupied":occupied,"known":known,"state":"occupied" if occupied else "empty"})
         return {"capacity":count,"slots":slots}
     except RadioError: raise
     except asyncio.TimeoutError as exc: raise RadioError("Companion channel query timed out") from exc
@@ -149,24 +152,43 @@ async def _read_name(path):
         if result.type==EventType.ERROR: raise RadioError(f"Companion name query failed: {result.payload}")
         payload=result.payload or {}; name=payload.get("name") if isinstance(payload,dict) else getattr(payload,"name",None)
         return str(name or "")
+    except RadioError: raise
+    except asyncio.TimeoutError as exc: raise RadioError("Companion name query timed out") from exc
+    except Exception as exc: raise RadioError(f"Companion name query failed: {exc}") from exc
     finally: await _close(radio)
 def set_device_name(device: dict | None, name: str) -> str:
     if not device: raise RadioError("no verified Companion device")
-    if not name or "\n" in name or "\r" in name: raise RadioError("device name must be a single non-empty line")
+    if not name or "\n" in name or "\r" in name or "\x00" in name:
+        raise RadioError("device name must be a single non-empty line without NUL characters")
     return asyncio.run(_set_name(device["device"],name))
 async def _set_name(path,name):
     from meshcore import EventType
     radio=await _open(path)
     try:
+        # APP_START is the documented start of a Companion session and also
+        # proves that SELF_INFO can be read before an administrative write.
+        start=await asyncio.wait_for(radio.commands.send_appstart(),READ_TIMEOUT)
+        if start.type==EventType.ERROR: raise RadioError(f"Companion name handshake failed: {start.payload}")
         info=await asyncio.wait_for(radio.commands.send_device_query(),READ_TIMEOUT); payload=info.payload or {}
+        if info.type==EventType.ERROR: raise RadioError(f"Companion device query failed: {info.payload}")
+        # DEVICE_INFO has no standard device-name-length field.  Some library
+        # versions expose one; honour it when present, otherwise let the
+        # Companion/library validate the documented set_name command and
+        # require an exact SELF_INFO read-back.  We never truncate a name.
         maximum=(payload.get("max_name_len") or payload.get("max_name_length")) if isinstance(payload,dict) else None
-        if not isinstance(maximum,int): raise RadioError("firmware did not report supported device-name length")
-        if len(name.encode("utf-8"))>maximum: raise RadioError(f"device name exceeds firmware limit of {maximum} UTF-8 bytes")
+        if maximum is not None:
+            if not isinstance(maximum,int) or maximum <= 0:
+                raise RadioError("Companion reported an invalid device-name length")
+            if len(name.encode("utf-8"))>maximum: raise RadioError(f"device name exceeds firmware limit of {maximum} UTF-8 bytes")
         result=await asyncio.wait_for(radio.commands.set_name(name),READ_TIMEOUT)
         if result.type==EventType.ERROR: raise RadioError(f"Companion rejected name: {result.payload}")
+    except RadioError: raise
+    except asyncio.TimeoutError as exc: raise RadioError("Companion name update timed out; no retry was attempted") from exc
+    except Exception as exc: raise RadioError(f"Companion name update failed: {exc}") from exc
     finally: await _close(radio)
     actual=await _read_name(path)
-    if actual!=name: raise RadioError("device-name write was not verified by read-back")
+    if actual!=name:
+        raise RadioError(f"Companion reported name {actual!r} after the save; requested {name!r}. The rename was not verified.")
     return actual
 
 async def _send_serial(path: str, channel_index: int, message: str) -> str:

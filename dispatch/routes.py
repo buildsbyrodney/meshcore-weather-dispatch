@@ -73,11 +73,13 @@ def settings():
  if request.method=="POST":
   value=request.form.get("device");db.save_setting("device",value or "null");db.save_setting("tx_channel","null")
   flash("Device selection saved. Transmit channel cleared and must be selected for this device.");return redirect(url_for("console.settings"))
- saved,dev,status=device_state(db);channels=[];channel_error=None;discovery=None
+ saved,dev,status=device_state(db);channels=[];channel_error=None;discovery=None;radio_name=None;name_error=None;cached_radio_name=db.setting("device_name") or ""
  if dev:
   try: discovery=discover_channels(dev);channels=[{"index":x["index"],"name":x["name"]} for x in discovery["slots"] if x["name"]]
   except RadioError as exc: channel_error=str(exc)
- return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,timezones=valid_timezones(),timezone=app_timezone(db))
+  try: radio_name=read_device_name(dev);db.save_setting("device_name",radio_name)
+  except RadioError as exc: name_error=str(exc)
+ return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,radio_name=radio_name,cached_radio_name=cached_radio_name,name_error=name_error,timezones=valid_timezones(),timezone=app_timezone(db))
 @bp.get("/api/devices")
 @admin
 def devices_api():
@@ -136,7 +138,7 @@ def remove_channel():
 def device_name():
  db=current_app.extensions["db"];_,dev,status=device_state(db)
  try:
-  name=set_device_name(dev,request.form.get("name",""));db.save_setting("device_name",name);flash(f"Companion device name saved: {name}.")
+  requested=request.form.get("name","");name=set_device_name(dev,requested);db.save_setting("device_name",name);flash(f"Companion device name verified: requested {requested!r}; radio now reports {name!r}.")
  except RadioError as exc: flash(f"Device name not saved: {status}. {exc}")
  return redirect(url_for("console.settings"))
 @bp.route("/test-messaging",methods=["GET","POST"])
