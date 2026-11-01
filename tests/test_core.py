@@ -213,8 +213,9 @@ def test_device_name_change_is_explicit_and_persists(tmp_path,monkeypatch):
  monkeypatch.setattr("dispatch.routes.discover_channels",lambda d:{"capacity":4,"slots":[]})
  monkeypatch.setattr("dispatch.routes.set_device_name",lambda d,n:n)
  token=client.get("/settings").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
- client.post("/settings/device-name",data={"csrf_token":token,"name":"WXALERT"})
+ response=client.post("/settings/device-name",data={"csrf_token":token,"name":"WXALERT"},follow_redirects=True)
  assert db.setting("device_name")=="WXALERT"
+ assert "requested &#39;WXALERT&#39;; radio now reports &#39;WXALERT&#39;" in response.data.decode()
 
 def test_xiao_unknown_channel_replies_are_not_counted_as_occupied_or_empty(monkeypatch):
  class EventType: ERROR="error"; OK="ok"
@@ -252,11 +253,13 @@ def test_settings_shows_radio_name_slot_states_and_delete_for_non_public(tmp_pat
  monkeypatch.setattr("dispatch.routes.read_device_name",lambda dev:"WXALERT")
  page=client.get("/settings").data.decode()
  assert "2 occupied, 0 confirmed available, 38 unknown" in page
+ assert "Current radio name (read from the connected Companion): <b>WXALERT</b>" in page
  assert 'value="WXALERT"' in page and "unknown (not eligible for changes)" in page
  assert page.count(">Delete</button>")==1 and "Confirm delete #myreach (slot 1)" in page
 
 def test_device_name_uses_readback_when_firmware_omits_a_name_limit(monkeypatch):
  state={"name":"OLD"}
+ created=[]
  class EventType: ERROR="error"; OK="ok"
  class Event:
   def __init__(self,type,payload=None): self.type=type;self.payload=payload or {}
@@ -269,6 +272,47 @@ def test_device_name_uses_readback_when_firmware_omits_a_name_limit(monkeypatch)
   async def disconnect(self): pass
  class MeshCore:
   @staticmethod
-  async def create_serial(path): return Radio()
+  async def create_serial(path):
+   radio=Radio();created.append(radio);return radio
  monkeypatch.setitem(sys.modules,"meshcore",SimpleNamespace(MeshCore=MeshCore,EventType=EventType))
  assert set_device_name({"device":"/dev/fake"},"WXALERT")=="WXALERT"
+ assert state["name"]=="WXALERT" and len(created)>=2 # write session, then fresh read-back session
+
+def test_device_name_rejected_by_companion_is_reported(monkeypatch):
+ class EventType: ERROR="error"; OK="ok"
+ class Event:
+  def __init__(self,type,payload=None): self.type=type;self.payload=payload or {}
+ class Commands:
+  async def send_appstart(self): return Event(EventType.OK,{"name":"W4OWE-BOT"})
+  async def send_device_query(self): return Event(EventType.OK,{"max_channels":40})
+  async def set_name(self,name): return Event(EventType.ERROR,{"code":"illegal_arg"})
+ class Radio:
+  commands=Commands()
+  async def disconnect(self): pass
+ class MeshCore:
+  @staticmethod
+  async def create_serial(path): return Radio()
+ monkeypatch.setitem(sys.modules,"meshcore",SimpleNamespace(MeshCore=MeshCore,EventType=EventType))
+ try: set_device_name({"device":"/dev/fake"},"OWE-WX-TEST")
+ except RadioError as error: assert "Companion rejected name" in str(error)
+ else: assert False, "a rejected set_name command must not be reported as saved"
+
+def test_device_name_readback_mismatch_reports_actual_radio_name(monkeypatch):
+ class EventType: ERROR="error"; OK="ok"
+ class Event:
+  def __init__(self,type,payload=None): self.type=type;self.payload=payload or {}
+ class Commands:
+  async def send_appstart(self): return Event(EventType.OK,{"name":"W4OWE-BOT"})
+  async def send_device_query(self): return Event(EventType.OK,{"max_channels":40})
+  async def set_name(self,name): return Event(EventType.OK)
+ class Radio:
+  commands=Commands()
+  async def disconnect(self): pass
+ class MeshCore:
+  @staticmethod
+  async def create_serial(path): return Radio()
+ monkeypatch.setitem(sys.modules,"meshcore",SimpleNamespace(MeshCore=MeshCore,EventType=EventType))
+ try: set_device_name({"device":"/dev/fake"},"OWE-WX-TEST")
+ except RadioError as error:
+  assert "W4OWE-BOT" in str(error) and "OWE-WX-TEST" in str(error)
+ else: assert False, "an unverified rename must not be reported as saved"

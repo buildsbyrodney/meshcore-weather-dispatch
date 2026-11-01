@@ -152,6 +152,9 @@ async def _read_name(path):
         if result.type==EventType.ERROR: raise RadioError(f"Companion name query failed: {result.payload}")
         payload=result.payload or {}; name=payload.get("name") if isinstance(payload,dict) else getattr(payload,"name",None)
         return str(name or "")
+    except RadioError: raise
+    except asyncio.TimeoutError as exc: raise RadioError("Companion name query timed out") from exc
+    except Exception as exc: raise RadioError(f"Companion name query failed: {exc}") from exc
     finally: await _close(radio)
 def set_device_name(device: dict | None, name: str) -> str:
     if not device: raise RadioError("no verified Companion device")
@@ -162,7 +165,12 @@ async def _set_name(path,name):
     from meshcore import EventType
     radio=await _open(path)
     try:
+        # APP_START is the documented start of a Companion session and also
+        # proves that SELF_INFO can be read before an administrative write.
+        start=await asyncio.wait_for(radio.commands.send_appstart(),READ_TIMEOUT)
+        if start.type==EventType.ERROR: raise RadioError(f"Companion name handshake failed: {start.payload}")
         info=await asyncio.wait_for(radio.commands.send_device_query(),READ_TIMEOUT); payload=info.payload or {}
+        if info.type==EventType.ERROR: raise RadioError(f"Companion device query failed: {info.payload}")
         # DEVICE_INFO has no standard device-name-length field.  Some library
         # versions expose one; honour it when present, otherwise let the
         # Companion/library validate the documented set_name command and
@@ -174,9 +182,13 @@ async def _set_name(path,name):
             if len(name.encode("utf-8"))>maximum: raise RadioError(f"device name exceeds firmware limit of {maximum} UTF-8 bytes")
         result=await asyncio.wait_for(radio.commands.set_name(name),READ_TIMEOUT)
         if result.type==EventType.ERROR: raise RadioError(f"Companion rejected name: {result.payload}")
+    except RadioError: raise
+    except asyncio.TimeoutError as exc: raise RadioError("Companion name update timed out; no retry was attempted") from exc
+    except Exception as exc: raise RadioError(f"Companion name update failed: {exc}") from exc
     finally: await _close(radio)
     actual=await _read_name(path)
-    if actual!=name: raise RadioError("device-name write was not verified by read-back")
+    if actual!=name:
+        raise RadioError(f"Companion reported name {actual!r} after the save; requested {name!r}. The rename was not verified.")
     return actual
 
 async def _send_serial(path: str, channel_index: int, message: str) -> str:
