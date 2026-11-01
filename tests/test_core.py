@@ -228,6 +228,19 @@ def test_compact_dashboard_includes_accessible_send_modal(tmp_path):
  assert 'type="button" class="send open-send"' in page and 'id="ignore-dialog"' in page and "open-ignore" in page
  assert "confirm('Ignore this warning?')" not in page
 
+def test_connection_state_is_compact_and_interlock_feedback_remains_visible(tmp_path,monkeypatch):
+ app=create_app(config(tmp_path));client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/x"},"Connected by stable path"))
+ monkeypatch.setattr("dispatch.routes.discover_channels",lambda dev:{"capacity":1,"slots":[]})
+ monkeypatch.setattr("dispatch.routes.read_device_name",lambda dev:"WXALERT")
+ settings=client.get("/settings").data.decode()
+ messaging=client.get("/test-messaging").data.decode()
+ assert 'class="status-line"' in settings and "Connected by stable path" in settings and "TX Disabled" in settings
+ assert "Transmission interlocks are disabled or configuration is incomplete." not in messaging
+ assert 'class="status-line"' in messaging and "TX Disabled" in messaging
+ assert "Manual dispatch only. A Companion accepting" not in client.get("/").data.decode()
+
 def test_ignore_requires_one_time_server_confirmation(tmp_path):
  app=create_app(config(tmp_path));ingest(app,[feature()]);db=app.extensions["db"];client=app.test_client()
  with client.session_transaction() as s:s["user"]="admin"
