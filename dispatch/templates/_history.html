@@ -1,1 +1,1 @@
-<thead><tr><th>When</th><th>Action</th><th>Alert</th><th>Operator</th><th>Detail</th></tr></thead><tbody>{% for x in history %}<tr><td>{{x.created_at}}</td><td>{{x.action}}</td><td>{{x.cap_id}}</td><td>{{x.actor or 'system'}}</td><td>{{x.detail or ''}}</td></tr>{% endfor %}</tbody>
+<thead><tr><th>When</th><th>Action</th><th>Alert</th><th>Operator</th><th>Detail</th></tr></thead><tbody>{% for x in history %}<tr><td>{{x.created_at|localtime}}</td><td>{{x.action}}</td><td>{{x.cap_id}}</td><td>{{x.actor or 'system'}}</td><td>{{x.detail or ''}}</td></tr>{% endfor %}</tbody>

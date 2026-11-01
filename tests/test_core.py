@@ -3,9 +3,11 @@ from dispatch import create_app
 from dispatch.messages import append_comment, truncate_utf8
 from dispatch.devices import resolve_device
 from dispatch.poller import ingest, fetch, eligible, cap_reference_ids
+from dispatch.meshcore_adapter import RadioError, verify_channel
+from dispatch.timefmt import local_time
 
 def config(tmp_path):
- return {"TESTING":True,"secret_key":"test","database":str(tmp_path/"test.sqlite"),"admin_username":"admin","admin_password_hash":"scrypt:32768:8:1$X$C8YciwLCAazhj6PeXTvoUHl0LTB7qm4JzB47lqYsOiwD9sEzKJzQx9QHdT1yTQ","nws_user_agent":"tests@example.invalid","states":["AL"],"alert_types":["Tornado Warning"],"counties":[],"max_message_bytes":80,"channels":["#wx-test"],"dry_run":True,"transmit_enabled":False,"poll_seconds":60,"start_poller":False}
+ return {"TESTING":True,"secret_key":"test","database":str(tmp_path/"test.sqlite"),"admin_username":"admin","admin_password_hash":"scrypt:32768:8:1$X$C8YciwLCAazhj6PeXTvoUHl0LTB7qm4JzB47lqYsOiwD9sEzKJzQx9QHdT1yTQ","nws_user_agent":"tests@example.invalid","states":["AL"],"alert_types":["Tornado Warning"],"counties":[],"max_message_bytes":80,"dry_run":True,"transmit_enabled":False,"poll_seconds":60,"start_poller":False}
 
 def feature(alert_id="new", refs="", kind="Alert", description="Shelter now", expires="2099-01-01T00:00:00+00:00"):
  return {"properties":{"id":alert_id,"event":"Tornado Warning","areaDesc":"Madison","headline":"Tornado warning","sent":"2026-01-01T00:00:00+00:00","expires":expires,"description":description,"messageType":kind,"references":refs}}
@@ -73,8 +75,10 @@ def test_actual_nws_geocodes_support_partial_and_multi_county_alerts():
 def test_dry_run_send_is_audited(tmp_path,monkeypatch):
  app=create_app(config(tmp_path)); ingest(app,[feature()]); client=app.test_client()
  with client.session_transaction() as s: s["user"]="admin"
+ app.extensions["db"].save_setting("tx_channel",'{"index": 2, "name": "#wx-test"}')
  token=client.get("/").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
- monkeypatch.setattr("dispatch.routes.scan_devices",lambda:[])
+ monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({}, {"device":"/dev/ttyACM0"}, "Connected"))
+ monkeypatch.setattr("dispatch.routes.verify_channel",lambda dev, channel: channel)
  assert client.post("/alerts/new/send",data={"csrf_token":token,"comment":"Test"}).status_code==302
  assert app.extensions["db"].get("new")["status"]=="sent"
 
@@ -103,3 +107,30 @@ def test_rejects_unsafe_configuration(tmp_path):
  try: validate_config(invalid)
  except ValueError as error: assert "state" in str(error)
  else: assert False, "empty state list must fail closed"
+
+def test_channel_selection_persists_name_and_slot(tmp_path,monkeypatch):
+ app=create_app(config(tmp_path)); client=app.test_client()
+ with client.session_transaction() as s: s["user"]="admin"
+ monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({}, {"device":"/dev/ttyACM0"}, "Connected"))
+ monkeypatch.setattr("dispatch.routes.list_channels",lambda dev:[{"index":2,"name":"#wx-northal"}])
+ token=client.get("/settings").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
+ assert client.post("/settings/channel",data={"csrf_token":token,"channel_index":"2"}).status_code==302
+ assert app.extensions["db"].setting("tx_channel")=="{\"index\": 2, \"name\": \"#wx-northal\"}"
+
+def test_channel_mismatch_blocks_transmission(monkeypatch):
+ monkeypatch.setattr("dispatch.meshcore_adapter.list_channels",lambda dev:[{"index":2,"name":"#other"}])
+ try: verify_channel({"device":"/dev/ttyACM0"},{"index":2,"name":"#wx-northal"})
+ except RadioError as error: assert "no longer matches" in str(error)
+ else: assert False, "mismatched slot must be blocked"
+
+def test_channel_discovery_and_connection_errors_are_safe(tmp_path,monkeypatch):
+ app=create_app(config(tmp_path)); client=app.test_client()
+ with client.session_transaction() as s: s["user"]="admin"
+ monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({}, {"device":"/dev/ttyACM0"}, "Connected"))
+ monkeypatch.setattr("dispatch.routes.list_channels",lambda dev: (_ for _ in ()).throw(RadioError("serial permission denied")))
+ page=client.get("/settings").data.decode(); assert "serial permission denied" in page
+ monkeypatch.setattr("dispatch.routes.scan_devices",lambda:[])
+ assert "options_html" in client.get("/api/devices").get_json()
+
+def test_local_time_has_zone_abbreviation():
+ assert local_time("2026-01-01T18:30:00+00:00","America/Chicago").endswith("CST")

@@ -6,7 +6,8 @@ from flask import Blueprint, current_app, flash, redirect, render_template, requ
 from werkzeug.security import check_password_hash
 from .devices import scan_devices, resolve_device
 from .messages import append_comment
-from .meshcore_adapter import send, verify_connection, RadioError
+from .meshcore_adapter import send, verify_connection, verify_channel, list_channels, RadioError
+from .timefmt import local_time
 
 bp=Blueprint("console",__name__)
 def admin(fn):
@@ -15,6 +16,15 @@ def admin(fn):
   if not session.get("user"): return redirect(url_for("console.login"))
   return fn(*a,**kw)
  return wrapped
+def saved_channel(db): return json.loads(db.setting("tx_channel") or "null")
+def device_state(db):
+ saved=json.loads(db.setting("device") or "null"); dev,status=resolve_device(saved,scan_devices()); return saved,dev,status
+def feed_state(db):
+ last=db.setting("nws_last_success"); error=db.setting("nws_last_error"); stale=True
+ if last:
+  try: stale=(datetime.now(timezone.utc)-datetime.fromisoformat(last)).total_seconds()>current_app.config.get("poll_seconds",60)*3
+  except ValueError: pass
+ return last,error,"stale" if stale else ("error" if error else "healthy")
 
 @bp.route("/login",methods=["GET","POST"])
 def login():
@@ -29,22 +39,13 @@ def logout(): session.clear();return redirect(url_for("console.login"))
 @bp.get("/")
 @admin
 def index():
- db=current_app.extensions["db"]
- last=db.setting("nws_last_success"); error=db.setting("nws_last_error"); stale=True
- if last:
-  try: stale=(datetime.now(timezone.utc)-datetime.fromisoformat(last)).total_seconds()>current_app.config.get("poll_seconds",60)*3
-  except ValueError: pass
- health="stale" if stale else ("error" if error else "healthy")
- return render_template("index.html",alerts=db.actionable(),history=db.history(),channels=current_app.config.get("channels",[]), cap=current_app.config.get("max_message_bytes",180),last_sync=last,feed_error=error,feed_health=health)
+ db=current_app.extensions["db"];last,error,health=feed_state(db)
+ return render_template("index.html",alerts=db.actionable(),history=db.history(),cap=current_app.config.get("max_message_bytes",180),last_sync=last,feed_error=error,feed_health=health,tx_channel=saved_channel(db))
 @bp.get("/api/state")
 @admin
 def state():
- db=current_app.extensions["db"]
- alerts=db.actionable(); history=db.history(); last=db.setting("nws_last_success"); error=db.setting("nws_last_error"); stale=True
- if last:
-  try: stale=(datetime.now(timezone.utc)-datetime.fromisoformat(last)).total_seconds()>current_app.config.get("poll_seconds",60)*3
-  except ValueError: pass
- return jsonify(alerts_html=render_template("_alerts.html",alerts=alerts,cap=current_app.config.get("max_message_bytes",180)),history_html=render_template("_history.html",history=history),nws_last_success=last,nws_last_error=error,feed_health="stale" if stale else ("error" if error else "healthy"))
+ db=current_app.extensions["db"];alerts=db.actionable();history=db.history();last,error,health=feed_state(db)
+ return jsonify(alerts_html=render_template("_alerts.html",alerts=alerts,cap=current_app.config.get("max_message_bytes",180),tx_channel=saved_channel(db)),history_html=render_template("_history.html",history=history),nws_last_success=last,nws_last_success_display=local_time(last,current_app.config.get("timezone","UTC")),nws_last_error=error,feed_health=health)
 @bp.post("/alerts/<cap_id>/ignore")
 @admin
 def ignore(cap_id):
@@ -55,31 +56,46 @@ def ignore(cap_id):
 @bp.post("/alerts/<cap_id>/send")
 @admin
 def transmit(cap_id):
- db=current_app.extensions["db"]; actor=session["user"]
+ db=current_app.extensions["db"];actor=session["user"];_,dev,status=device_state(db);channel=saved_channel(db)
+ try: verify_channel(dev,channel)
+ except RadioError as exc: flash(f"No transmission: {status}. {exc}");return redirect(url_for("console.index"))
  if not db.claim(cap_id,actor): flash("Alert is no longer actionable.");return redirect(url_for("console.index"))
- alert=db.get(cap_id); message=append_comment(alert["message"],request.form.get("comment",""),current_app.config.get("max_message_bytes",180))
- saved=json.loads(db.setting("device") or "null"); dev,status=resolve_device(saved,scan_devices())
+ alert=db.get(cap_id);message=append_comment(alert["message"],request.form.get("comment",""),current_app.config.get("max_message_bytes",180))
  try:
-  detail=send(current_app.config,dev,current_app.config.get("channels",[""])[0],message)
-  db.finish(cap_id,"sent",actor,detail,message);flash("Dispatch recorded. Radio acceptance is not proof of mesh delivery.")
- except RadioError as exc:
-  db.finish(cap_id,"failed",actor,str(exc),message);flash(f"No transmission: {exc}")
+  detail=send(current_app.config,dev,channel,message);db.finish(cap_id,"sent",actor,detail,message);flash("Dispatch recorded. Radio acceptance is not proof of mesh delivery.")
+ except RadioError as exc: db.finish(cap_id,"failed",actor,str(exc),message);flash(f"No transmission: {exc}")
  return redirect(url_for("console.index"))
 @bp.route("/settings",methods=["GET","POST"])
 @admin
 def settings():
  db=current_app.extensions["db"]
  if request.method=="POST":
-  value=request.form.get("device")
-  db.save_setting("device",value) if value else db.save_setting("device","null")
-  flash("Device selection saved; weather monitoring is unchanged.");return redirect(url_for("console.settings"))
- found=scan_devices();saved=json.loads(db.setting("device") or "null");_,status=resolve_device(saved,found)
- return render_template("settings.html",devices=found,saved=saved,status=status)
+  value=request.form.get("device");db.save_setting("device",value or "null");db.save_setting("tx_channel","null")
+  flash("Device selection saved. Transmit channel cleared and must be selected for this device.");return redirect(url_for("console.settings"))
+ saved,dev,status=device_state(db);channels=[];channel_error=None
+ if dev:
+  try: channels=list_channels(dev)
+  except RadioError as exc: channel_error=str(exc)
+ return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,channels=channels,tx_channel=saved_channel(db),channel_error=channel_error)
+@bp.get("/api/devices")
+@admin
+def devices_api():
+ db=current_app.extensions["db"];saved=json.loads(db.setting("device") or "null")
+ return jsonify(options_html=render_template("_device_options.html",devices=scan_devices(),saved=saved))
+@bp.post("/settings/channel")
+@admin
+def select_channel():
+ db=current_app.extensions["db"];_,dev,status=device_state(db)
+ try:
+  index=int(request.form.get("channel_index","-1"));channels=list_channels(dev);selected=next((c for c in channels if c["index"]==index),None)
+  if not selected: raise RadioError("selected channel is unavailable; rescan the connected Companion")
+  db.save_setting("tx_channel",json.dumps(selected));db.audit(None,"tx_channel_selected",session["user"],f"{selected['name']} (slot {selected['index']})");flash(f"Transmit channel saved: {selected['name']}.")
+ except (ValueError,RadioError) as exc: flash(f"Channel not saved: {status}. {exc}")
+ return redirect(url_for("console.settings"))
 @bp.post("/settings/test")
 @admin
 def test_device():
- saved=json.loads(current_app.extensions["db"].setting("device") or "null");dev,status=resolve_device(saved,scan_devices())
- try:
-  result=verify_connection(current_app.config,dev);flash(status+". "+result)
+ db=current_app.extensions["db"];_,dev,status=device_state(db)
+ try: flash(status+". "+verify_connection(current_app.config,dev))
  except RadioError as exc: flash(status+". "+str(exc))
  return redirect(url_for("console.settings"))

@@ -33,16 +33,35 @@ Log in using the password hash in `config.yml` (generate it with `python -c "fro
 6. Generate a session secret with `openssl rand -hex 32`; put `WEATHER_DISPATCH_SECRET_KEY=...` and `MESHCORE_SEND_ENABLED=0` in `/etc/meshcore-weather-dispatch/environment` (mode `600`). Do not commit that file.
 7. Install `systemd/meshcore-weather-dispatch.service`, adjust paths if needed, then `sudo systemctl daemon-reload && sudo systemctl enable --now meshcore-weather-dispatch`. The supplied unit intentionally uses one Gunicorn worker, which owns the NWS polling thread. Check `sudo systemctl status meshcore-weather-dispatch` and `sudo journalctl -u meshcore-weather-dispatch -f`.
 8. Put the app behind an HTTPS reverse proxy and restrict it to your LAN/VPN. Keep `session_cookie_secure: true` for HTTPS; use `false` only during a short local HTTP setup session.
+9. Allow the service account to open the Companion serial device, then restart the service: `sudo usermod -aG dialout weatherdispatch && sudo systemctl restart meshcore-weather-dispatch`.
 
 ### Bench-test a Companion without transmitting
 
-Leave `dry_run: true`, `transmit_enabled: false`, and `MESHCORE_SEND_ENABLED=0`. Connect the Companion, open **Settings**, select it manually, and use **Test selected connection**. In dry-run this verifies the chosen identity without opening the serial port; with `dry_run: false` it performs only the library's read-only `send_appstart` handshake. Neither action sends a channel message. Do not change the two transmission interlocks until you have tested with an isolated/bench radio and confirmed the configured `channel_index` is correct.
+Leave `dry_run: true`, `transmit_enabled: false`, and `MESHCORE_SEND_ENABLED=0`. Connect the Companion, open **Settings**, select it manually, and use **Test selected connection**. In dry-run this verifies the chosen identity without opening the serial port; with `dry_run: false` it performs only the library's read-only `send_appstart` handshake. Settings can then read the existing Companion channels and lets the administrator select one by name; it never creates or changes a channel. Neither action sends a channel message. Do not change the two transmission interlocks until you have tested with an isolated/bench radio and confirmed the selected channel.
 
 ## Configuration
 
-`states` accepts NWS two-letter state codes. `counties` accepts NWS SAME six-digit codes (for example `001089`; shorter numeric input is normalized), UGC county codes (for example `ALC089`), or an NWS URL ending in either code. The filter checks the NWS JSON `geocode.SAME` and `geocode.UGC` values; it intentionally does not inspect polygons, so missing geometry is safe. An alert affecting several counties matches when any configured county matches. Empty county list means all alerts returned by a state feed. `alert_types` is an allowlist. `channels` defaults to exactly one regional channel to avoid duplicate originating transmissions.
+`states` accepts NWS two-letter state codes. `counties` accepts NWS SAME six-digit codes (for example `001089`; shorter numeric input is normalized), UGC county codes (for example `ALC089`), or an NWS URL ending in either code. The filter checks the NWS JSON `geocode.SAME` and `geocode.UGC` values; it intentionally does not inspect polygons, so missing geometry is safe. An alert affecting several counties matches when any configured county matches. Empty county list means all alerts returned by a state feed. `alert_types` is an allowlist. Select exactly one existing regional transmit channel by name in Settings; the application records its radio slot but never changes the radio configuration.
 
 The NWS endpoint is polled roughly every 60 seconds. CAP `id`, `references`, `messageType`, `sent`, and `expires` are persisted. CAP-linked revisions form one related history. A normalized fingerprint prevents a new CAP ID with unchanged substantive content from becoming a duplicate actionable item. A material revision of a sent or ignored warning becomes a clearly labeled manual decision; a cancellation closes only pending revisions and never broadcasts automatically. The dashboard shows last successful synchronization, errors, and a stale-feed warning. The full NWS description is retained in SQLite while the derived radio text is capped by UTF-8 bytes.
+
+## Upgrade an existing Raspberry Pi installation
+
+These commands update only the checked-out application and its virtual-environment dependencies. They do **not** copy `config.example.yml`, touch `/etc/meshcore-weather-dispatch/environment`, alter the selected USB device/channel saved in SQLite, or replace the SQLite database.
+
+```bash
+sudo systemctl stop meshcore-weather-dispatch
+sudo -u weatherdispatch -H git -C /opt/meshcore-weather-dispatch fetch --prune origin
+sudo -u weatherdispatch -H git -C /opt/meshcore-weather-dispatch checkout main
+sudo -u weatherdispatch -H git -C /opt/meshcore-weather-dispatch pull --ff-only origin main
+sudo -u weatherdispatch -H /opt/meshcore-weather-dispatch/.venv/bin/pip install --upgrade -e /opt/meshcore-weather-dispatch
+sudo usermod -aG dialout weatherdispatch
+sudo systemctl daemon-reload
+sudo systemctl start meshcore-weather-dispatch
+sudo systemctl status meshcore-weather-dispatch --no-pager
+```
+
+Before starting, optionally make a separate backup of the only two local state files: `sudo cp -a /etc/meshcore-weather-dispatch/config.yml /etc/meshcore-weather-dispatch/config.yml.backup` and `sudo cp -a /var/lib/meshcore-weather-dispatch/dispatch.sqlite3 /var/lib/meshcore-weather-dispatch/dispatch.sqlite3.backup`. Keep the existing environment file unchanged, especially `MESHCORE_SEND_ENABLED=0`. For this release, add `timezone: America/Chicago` (or the local IANA timezone) with `sudoedit /etc/meshcore-weather-dispatch/config.yml`; do not replace the file with the example configuration.
 
 ### USB Companion setup
 

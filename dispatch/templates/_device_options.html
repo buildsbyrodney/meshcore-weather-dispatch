@@ -1,0 +1,1 @@
+<option value="">— No device selected —</option>{% for d in devices %}<option value='{{d|tojson}}' {% if saved and saved.device==d.device %}selected{% endif %}>{{d.friendly}}{% if d.stable_path %} (stable: {{d.stable_path}}){% endif %}</option>{% endfor %}
