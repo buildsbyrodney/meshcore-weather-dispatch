@@ -602,8 +602,21 @@ def test_coverage_page_explains_catalog_storage_and_automatic_filters(tmp_path):
  before=client.get("/settings/coverage-counties").data.decode()
  assert "Import catalog first. The official NWS county catalog is stored locally" in before
  assert "Coverage is stored locally and is fail-closed" not in before
+ assert 'class="catalog-initial-import"' in before and 'class="coverage-action"' in before
  rows=normalize_catalog({"features":[{"properties":{"id":"ALC089","name":"Madison"}}]})
  app.extensions["db"].replace_catalog(rows,{"source":"official","retrieved_at":"today","version":"v1"})
  after=client.get("/settings/coverage-counties").data.decode()
  assert "Catalog imported and stored locally. Re-import only to refresh the county list." in after
  assert "Filters apply automatically." in after and 'method="get"' not in after
+ assert "Advanced / Refresh Catalog" in after and "Source: official · imported today" in after
+
+def test_catalog_refresh_preserves_selected_coverage(tmp_path,monkeypatch):
+ app=create_app(config(tmp_path));db=app.extensions["db"];client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ first=normalize_catalog({"features":[{"properties":{"id":"ALC089","name":"Madison"}}]})
+ db.replace_catalog(first,{"source":"old","retrieved_at":"before","version":"v1"});db.save_coverage(["ALC089"])
+ refreshed=normalize_catalog({"features":[{"properties":{"id":"ALC089","name":"Madison"}},{"properties":{"id":"ALC083","name":"Limestone"}}]})
+ monkeypatch.setattr("dispatch.routes.fetch_catalog",lambda ua:(refreshed,{"source":"official","retrieved_at":"after","version":"v2"}))
+ token=client.get("/settings/coverage-counties").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
+ client.post("/settings/coverage-counties",data={"csrf_token":token,"action":"import"})
+ assert [row["ugc"] for row in db.coverage()]==["ALC089"] and db.catalog_meta()["version"]=="v2"
