@@ -1,9 +1,11 @@
 from __future__ import annotations
 import json, requests
+from uuid import uuid4
 from datetime import datetime, timezone
 from functools import wraps
 from flask import Blueprint, current_app, flash, redirect, render_template, request, session, url_for, jsonify
 from werkzeug.security import check_password_hash
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from .devices import scan_devices, resolve_device
 from .messages import append_comment, radio_message, MessageError
 from .meshcore_adapter import send, verify_connection, verify_channel, list_channels, discover_channels, add_hashtag_channel, delete_channel, read_device_name, set_device_name, message_limit, RadioError
@@ -31,6 +33,7 @@ def feed_state(db):
  return last,error,"stale" if stale else ("error" if error else "healthy")
 def final_alert_message(alert, comment=""):
  return append_comment(radio_message(json.loads(alert["raw_json"]),app_timezone(current_app.extensions["db"])),comment,current_app.config.get("max_message_bytes",180))
+def preview_signer(): return URLSafeTimedSerializer(current_app.config["SECRET_KEY"],salt="dispatch-preview-v1")
 
 @bp.route("/login",methods=["GET","POST"])
 def login():
@@ -56,28 +59,48 @@ def state():
 @admin
 def ignore(cap_id):
  db=current_app.extensions["db"]
+ if request.form.get("confirm")!="yes": flash("No change: explicit confirmation is required.");return redirect(url_for("console.index"))
+ try: preview=preview_signer().loads(request.form.get("ignore_token",""),max_age=300)
+ except (SignatureExpired,BadSignature): flash("No change: ignore confirmation expired or is invalid.");return redirect(url_for("console.index"))
+ alert=db.get(cap_id)
+ if preview.get("action")!="ignore" or preview.get("cap_id")!=cap_id or not alert or alert["status"]!="pending" or preview.get("updated_at")!=alert["updated_at"]: flash("No change: warning changed; review it again.");return redirect(url_for("console.index"))
+ if not db.consume_preview(preview.get("jti", "")): flash("No change: this confirmation was already used; review the warning again.");return redirect(url_for("console.index"))
  if db.claim(cap_id,session["user"]): db.finish(cap_id,"ignored",session["user"])
  else: flash("Alert is no longer actionable.")
  return redirect(url_for("console.index"))
+@bp.post("/alerts/<cap_id>/ignore-preview")
+@admin
+def preview_ignore(cap_id):
+ db=current_app.extensions["db"];alert=db.get(cap_id)
+ if not alert or alert["status"]!="pending": return jsonify(error="alert is no longer actionable"),409
+ return jsonify(token=preview_signer().dumps({"jti":uuid4().hex,"action":"ignore","cap_id":cap_id,"updated_at":alert["updated_at"]}))
 @bp.post("/alerts/<cap_id>/preview")
 @admin
 def preview_transmit(cap_id):
  alert=current_app.extensions["db"].get(cap_id)
  if not alert or alert["status"]!="pending": return jsonify(error="alert is no longer actionable"),409
  try:
-  message=final_alert_message(alert,request.form.get("comment",""));return jsonify(message=message,bytes=len(message.encode("utf-8")),cap=message_limit(current_app.config))
+  comment=request.form.get("comment","");message=final_alert_message(alert,comment);channel=saved_channel(current_app.extensions["db"])
+  if not channel: return jsonify(error="no transmit channel selected"),409
+  payload={"jti":uuid4().hex,"cap_id":cap_id,"updated_at":alert["updated_at"],"message":message,"comment":comment,"channel":channel,"cap":message_limit(current_app.config)}
+  token=preview_signer().dumps(payload);return jsonify(message=message,bytes=len(message.encode("utf-8")),cap=message_limit(current_app.config),token=token,channel=channel,test_only=bool(alert["test_only"]),event=alert["event"],areas=alert["areas"],expires=local_time(alert["expires"],app_timezone(current_app.extensions["db"])))
  except MessageError as exc:return jsonify(error=str(exc)),400
 @bp.post("/alerts/<cap_id>/send")
 @admin
 def transmit(cap_id):
  db=current_app.extensions["db"];actor=session["user"];_,dev,status=device_state(db);channel=saved_channel(db)
  if request.form.get("confirm")!="yes": flash("No transmission: explicit confirmation is required.");return redirect(url_for("console.index"))
+ try: preview=preview_signer().loads(request.form.get("preview_token",""),max_age=300)
+ except (SignatureExpired,BadSignature): flash("No transmission: preview confirmation expired or is invalid.");return redirect(url_for("console.index"))
+ alert=db.get(cap_id)
+ if preview.get("cap_id")!=cap_id or not alert or alert["status"]!="pending" or preview.get("updated_at")!=alert["updated_at"] or preview.get("channel")!=channel or preview.get("cap")!=message_limit(current_app.config): flash("No transmission: warning, transmit channel, or message limit changed; review it again.");return redirect(url_for("console.index"))
+ try: message=final_alert_message(alert,request.form.get("comment",""))
+ except MessageError as exc: flash(f"No transmission: {exc}");return redirect(url_for("console.index"))
+ if preview.get("comment")!=request.form.get("comment","") or preview.get("message")!=message: flash("No transmission: message changed; review it again.");return redirect(url_for("console.index"))
+ if not db.consume_preview(preview.get("jti", "")): flash("No transmission: this confirmation was already used; review the warning again.");return redirect(url_for("console.index"))
  try: verify_channel(dev,channel)
  except RadioError as exc: flash(f"No transmission: {status}. {exc}");return redirect(url_for("console.index"))
  if not db.claim(cap_id,actor): flash("Alert is no longer actionable.");return redirect(url_for("console.index"))
- alert=db.get(cap_id)
- try: message=final_alert_message(alert,request.form.get("comment",""))
- except MessageError as exc: db.finish(cap_id,"failed",actor,str(exc));flash(f"No transmission: {exc}");return redirect(url_for("console.index"))
  try:
   detail=send(current_app.config,dev,channel,message);db.finish(cap_id,"sent",actor,detail,message);flash("Dispatch recorded. Radio acceptance is not proof of mesh delivery.")
  except RadioError as exc: db.finish(cap_id,"failed",actor,str(exc),message);flash(f"No transmission: {exc}")

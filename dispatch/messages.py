@@ -20,6 +20,8 @@ def radio_message(feature: dict, timezone_name="UTC") -> str:
     return text+(f" {headline}" if headline and headline.casefold() not in text.casefold() else "")
 
 def append_comment(base: str, comment: str, byte_cap: int) -> str:
+    if len(base.encode("utf-8")) > byte_cap:
+        raise MessageError("essential warning details exceed the configured UTF-8 limit")
     comment = " ".join(comment.split())
     if not comment: return base
     marker = " [OPERATOR: "
