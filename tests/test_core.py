@@ -573,8 +573,11 @@ def test_coverage_page_import_state_filter_and_fail_closed_save(tmp_path,monkeyp
  page=client.get("/settings/coverage-counties?state=TN").data.decode();assert 'value="TNC103"' in page and "Lincoln, TN" in page
  client.post("/settings/coverage-counties",data={"csrf_token":token,"action":"save","county":["ALC089","TNC103"]})
  assert {r["ugc"] for r in db.coverage()}=={"ALC089","TNC103"}
- client.post("/settings/coverage-counties",data={"csrf_token":token,"action":"save"})
+ failed=client.post("/settings/coverage-counties",data={"csrf_token":token,"action":"save","return_state":"TN","return_query":"Lincoln"})
  assert {r["ugc"] for r in db.coverage()}=={"ALC089","TNC103"}
+ failed_page=failed.data.decode()
+ assert "Coverage was not changed" in failed_page and 'value="TN" selected' in failed_page
+ assert 'const saved=new Set(' in failed_page and "ALC089" in failed_page and "TNC103" in failed_page
 
 def test_coverage_selector_preserves_cross_state_pending_choices_client_side(tmp_path,monkeypatch):
  cfg=config(tmp_path);cfg["states"]=["AL","TN"];app=create_app(cfg);db=app.extensions["db"];client=app.test_client()

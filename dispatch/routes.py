@@ -132,6 +132,9 @@ def settings():
 @admin
 def coverage_counties_page():
  db=current_app.extensions["db"]
+ def page(state="",query="",selected=None):
+  coverage=db.coverage();saved={r["ugc"] for r in coverage}
+  return render_template("coverage_counties.html",catalog=db.catalog(),states=db.catalog_states(),state=state,query=query,selected=saved if selected is None else set(selected),saved_selected=saved,coverage=coverage,meta=db.catalog_meta())
  if request.method=="POST":
   action=request.form.get("action");return_filters={"state":request.form.get("return_state",""),"q":request.form.get("return_query","")}
   try:
@@ -141,10 +144,11 @@ def coverage_counties_page():
     selected=request.form.getlist("county")
     if len(selected)>25 and request.form.get("confirm_expand")!="yes": raise CatalogError("confirm this coverage expansion before saving")
     db.save_coverage(selected,{str(x).upper() for x in current_app.config.get("states",[])});db.audit(None,"coverage_counties_saved",session["user"],f"{len(selected)} counties selected");flash(f"Coverage saved: {len(selected)} counties.")
-  except (CatalogError,ValueError,requests.RequestException) as exc: flash(f"Coverage was not changed: {exc}")
+  except (CatalogError,ValueError,requests.RequestException) as exc:
+   flash(f"Coverage was not changed: {exc}")
+   if action=="save": return page(return_filters["state"],return_filters["q"],request.form.getlist("county"))
   return redirect(url_for("console.coverage_counties_page",**{key:value for key,value in return_filters.items() if value}))
- state=request.args.get("state","");query=request.args.get("q","");selected={r["ugc"] for r in db.coverage()};catalog=db.catalog()
- return render_template("coverage_counties.html",catalog=catalog,states=db.catalog_states(),state=state,query=query,selected=selected,coverage=db.coverage(),meta=db.catalog_meta())
+ return page(request.args.get("state",""),request.args.get("q",""))
 @bp.get("/api/devices")
 @admin
 def devices_api():
