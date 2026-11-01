@@ -181,6 +181,8 @@ def test_channel_delete_protects_tx_and_confirms(tmp_path,monkeypatch):
  called=[];monkeypatch.setattr("dispatch.routes.delete_channel",lambda *a:called.append(a))
  client.post("/settings/channels/delete",data={"csrf_token":token,"slot":"2","name":"#wx","confirm":"yes"})
  assert not called
+ client.post("/settings/channels/delete",data={"csrf_token":token,"slot":"0","name":"Public","confirm":"yes"})
+ assert not called
  db.save_setting("tx_channel","null")
  client.post("/settings/channels/delete",data={"csrf_token":token,"slot":"3","name":"#other","confirm":"yes"})
  assert called and db.history()[0]["action"]=="channel_deleted"

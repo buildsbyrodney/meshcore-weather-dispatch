@@ -129,6 +129,9 @@ def remove_channel():
  try:
   slot=int(request.form.get("slot","-1"));name=request.form.get("name","")
   if request.form.get("confirm")!="yes": raise RadioError("explicit confirmation is required")
+  # Protect the built-in channel before delegating to the radio adapter too.
+  # This keeps a crafted HTTP request from reaching any future adapter path.
+  if name.strip().casefold() in {"public","#public"}: raise RadioError("Public channel is protected from deletion")
   if selected and selected.get("index")==slot: raise RadioError("deselect the current transmit channel before deleting it")
   delete_channel(dev,slot,name);db.audit(None,"channel_deleted",session["user"],f"device={dev.get('stable_path') or dev.get('device')}; channel={name}; slot={slot}");flash(f"Deleted {name} from slot {slot}.")
  except (ValueError,RadioError) as exc: flash(f"Channel was not deleted: {status}. {exc}")
