@@ -1,0 +1,18 @@
+database: /var/lib/meshcore-weather-dispatch/dispatch.sqlite3
+host: 127.0.0.1
+port: 8080
+secret_key_env: WEATHER_DISPATCH_SECRET_KEY
+admin_username: admin
+admin_password_hash: "REPLACE_WITH_WERKZEUG_HASH"
+nws_user_agent: "MeshCoreWeatherDispatch/0.1 admin@example.invalid"
+poll_seconds: 60
+states: [AL]
+counties: []
+alert_types: ["Tornado Warning", "Severe Thunderstorm Warning", "Flash Flood Warning"]
+channels: ["#wx-northal"]
+# This is the existing Companion channel slot to use. The application never creates or changes channels.
+channel_index: 0
+max_message_bytes: 180
+transmit_enabled: false
+dry_run: true
+device: null
