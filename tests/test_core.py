@@ -180,3 +180,34 @@ def test_channel_delete_protects_tx_and_confirms(tmp_path,monkeypatch):
  db.save_setting("tx_channel","null")
  client.post("/settings/channels/delete",data={"csrf_token":token,"slot":"3","name":"#other","confirm":"yes"})
  assert called and db.history()[0]["action"]=="channel_deleted"
+
+def test_manual_test_message_simulated_and_utf8_limit(tmp_path,monkeypatch):
+ app=create_app(config(tmp_path));db=app.extensions["db"];db.save_setting("tx_channel",'{"index":1,"name":"#bench"}');client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/x"},"Connected"))
+ monkeypatch.setattr("dispatch.routes.verify_channel",lambda *a:None)
+ monkeypatch.setattr("dispatch.routes.send",lambda *a:"dry-run: no serial connection or RF transmission attempted")
+ token=client.get("/test-messaging").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
+ client.post("/test-messaging",data={"csrf_token":token,"message":"é"*41,"confirm":"yes"})
+ assert not db.test_history()
+ client.post("/test-messaging",data={"csrf_token":token,"message":"bench","confirm":"yes"})
+ assert db.test_history()[0]["outcome"]=="simulated"
+
+def test_test_message_channel_failure_is_separate_history(tmp_path,monkeypatch):
+ app=create_app(config(tmp_path));db=app.extensions["db"];db.save_setting("tx_channel",'{"index":1,"name":"#bench"}');client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/x"},"Connected"))
+ monkeypatch.setattr("dispatch.routes.verify_channel",lambda *a: (_ for _ in ()).throw(RadioError("channel changed")))
+ token=client.get("/test-messaging").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
+ client.post("/test-messaging",data={"csrf_token":token,"message":"bench","confirm":"yes"})
+ assert db.test_history()[0]["outcome"]=="failed" and not db.history()
+
+def test_device_name_change_is_explicit_and_persists(tmp_path,monkeypatch):
+ app=create_app(config(tmp_path));db=app.extensions["db"];client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/x"},"Connected"))
+ monkeypatch.setattr("dispatch.routes.discover_channels",lambda d:{"capacity":4,"slots":[]})
+ monkeypatch.setattr("dispatch.routes.set_device_name",lambda d,n:n)
+ token=client.get("/settings").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
+ client.post("/settings/device-name",data={"csrf_token":token,"name":"WXALERT"})
+ assert db.setting("device_name")=="WXALERT"
