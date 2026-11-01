@@ -73,11 +73,13 @@ def settings():
  if request.method=="POST":
   value=request.form.get("device");db.save_setting("device",value or "null");db.save_setting("tx_channel","null")
   flash("Device selection saved. Transmit channel cleared and must be selected for this device.");return redirect(url_for("console.settings"))
- saved,dev,status=device_state(db);channels=[];channel_error=None;discovery=None
+ saved,dev,status=device_state(db);channels=[];channel_error=None;discovery=None;radio_name=db.setting("device_name") or ""
  if dev:
   try: discovery=discover_channels(dev);channels=[{"index":x["index"],"name":x["name"]} for x in discovery["slots"] if x["name"]]
   except RadioError as exc: channel_error=str(exc)
- return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,timezones=valid_timezones(),timezone=app_timezone(db))
+  try: radio_name=read_device_name(dev);db.save_setting("device_name",radio_name)
+  except RadioError as exc: channel_error=channel_error or f"Device-name read error: {exc}"
+ return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,radio_name=radio_name,timezones=valid_timezones(),timezone=app_timezone(db))
 @bp.get("/api/devices")
 @admin
 def devices_api():

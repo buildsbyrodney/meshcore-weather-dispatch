@@ -18,8 +18,8 @@ async def _close(radio):
             pass
 
 async def _open(path: str):
-    from meshcore import MeshCore
     try:
+        from meshcore import MeshCore
         return await asyncio.wait_for(MeshCore.create_serial(path), READ_TIMEOUT)
     except PermissionError as exc: raise RadioError("serial permission denied; add weatherdispatch to the dialout group") from exc
     except asyncio.TimeoutError as exc: raise RadioError("Companion connection timed out") from exc
@@ -49,13 +49,13 @@ async def _slots_serial(path: str) -> dict:
         for index in range(count):
             result=await asyncio.wait_for(radio.commands.get_channel(index), READ_TIMEOUT)
             if result.type == EventType.ERROR:
-                slots.append({"index":index,"name":"","occupied":True,"known":False});continue
+                slots.append({"index":index,"name":"","occupied":False,"known":False,"state":"unknown"});continue
             name=str(_channel_name(result.payload) or "")
             secret=_channel_secret(result.payload)
             # Unknown secret state is deliberately not considered available.
             known=secret is not None
             occupied=bool(name) or not known or any(secret)
-            slots.append({"index":index,"name":name,"occupied":occupied,"known":known})
+            slots.append({"index":index,"name":name,"occupied":occupied,"known":known,"state":"occupied" if occupied else "empty"})
         return {"capacity":count,"slots":slots}
     except RadioError: raise
     except asyncio.TimeoutError as exc: raise RadioError("Companion channel query timed out") from exc
