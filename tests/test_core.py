@@ -595,3 +595,15 @@ def test_coverage_selector_preserves_cross_state_pending_choices_client_side(tmp
  assert "state=TN" in response.headers["Location"] and "q=Lincoln" in response.headers["Location"]
  after=client.get(response.headers["Location"]).data.decode()
  assert 'value="TN" selected' in after and 'id="county-search" type="search" value="Lincoln"' in after
+
+def test_coverage_page_explains_catalog_storage_and_automatic_filters(tmp_path):
+ app=create_app(config(tmp_path));client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ before=client.get("/settings/coverage-counties").data.decode()
+ assert "Import catalog first. The official NWS county catalog is stored locally" in before
+ assert "Coverage is stored locally and is fail-closed" not in before
+ rows=normalize_catalog({"features":[{"properties":{"id":"ALC089","name":"Madison"}}]})
+ app.extensions["db"].replace_catalog(rows,{"source":"official","retrieved_at":"today","version":"v1"})
+ after=client.get("/settings/coverage-counties").data.decode()
+ assert "Catalog imported and stored locally. Re-import only to refresh the county list." in after
+ assert "Filters apply automatically." in after and 'method="get"' not in after
