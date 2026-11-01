@@ -45,6 +45,24 @@ Leave `dry_run: true`, `transmit_enabled: false`, and `MESHCORE_SEND_ENABLED=0`.
 
 The NWS endpoint is polled roughly every 60 seconds. CAP `id`, `references`, `messageType`, `sent`, and `expires` are persisted. CAP-linked revisions form one related history. A normalized fingerprint prevents a new CAP ID with unchanged substantive content from becoming a duplicate actionable item. A material revision of a sent or ignored warning becomes a clearly labeled manual decision; a cancellation closes only pending revisions and never broadcasts automatically. The dashboard shows last successful synchronization, errors, and a stale-feed warning. The full NWS description is retained in SQLite while the derived radio text is capped by UTF-8 bytes.
 
+## Upgrade an existing Raspberry Pi installation
+
+These commands update only the checked-out application and its virtual-environment dependencies. They do **not** copy `config.example.yml`, touch `/etc/meshcore-weather-dispatch/environment`, alter the selected USB device/channel saved in SQLite, or replace the SQLite database.
+
+```bash
+sudo systemctl stop meshcore-weather-dispatch
+sudo -u weatherdispatch -H git -C /opt/meshcore-weather-dispatch fetch --prune origin
+sudo -u weatherdispatch -H git -C /opt/meshcore-weather-dispatch checkout main
+sudo -u weatherdispatch -H git -C /opt/meshcore-weather-dispatch pull --ff-only origin main
+sudo -u weatherdispatch -H /opt/meshcore-weather-dispatch/.venv/bin/pip install --upgrade -e /opt/meshcore-weather-dispatch
+sudo usermod -aG dialout weatherdispatch
+sudo systemctl daemon-reload
+sudo systemctl start meshcore-weather-dispatch
+sudo systemctl status meshcore-weather-dispatch --no-pager
+```
+
+Before starting, optionally make a separate backup of the only two local state files: `sudo cp -a /etc/meshcore-weather-dispatch/config.yml /etc/meshcore-weather-dispatch/config.yml.backup` and `sudo cp -a /var/lib/meshcore-weather-dispatch/dispatch.sqlite3 /var/lib/meshcore-weather-dispatch/dispatch.sqlite3.backup`. Keep the existing environment file unchanged, especially `MESHCORE_SEND_ENABLED=0`. For this release, add `timezone: America/Chicago` (or the local IANA timezone) with `sudoedit /etc/meshcore-weather-dispatch/config.yml`; do not replace the file with the example configuration.
+
 ### USB Companion setup
 
 Open Settings as an administrator and choose **Detect devices**. The scan reads `/dev/serial/by-id` and serial descriptors; it does not open or change any device. Pick a result and test it. On success, the application stores both the selected stable `/dev/serial/by-id/...` path and USB identity (VID, PID, serial number). At reconnect it resolves the by-id path first, then only a unique matching USB identity. Zero matches means disconnected; multiple matches means ambiguous. It will never guess and select a different radio. Remove or change the device in Settings without stopping NWS polling.

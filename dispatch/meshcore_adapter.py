@@ -8,8 +8,13 @@ class RadioError(Exception): pass
 async def _close(radio):
     disconnect=getattr(radio,"disconnect",None)
     if disconnect:
-        outcome=disconnect()
-        if hasattr(outcome,"__await__"): await outcome
+        try:
+            outcome=disconnect()
+            if hasattr(outcome,"__await__"): await outcome
+        except Exception:
+            # A USB unplug during cleanup must not turn a handled read/send
+            # result into an HTTP 500. The original operation records its result.
+            pass
 
 async def _open(path: str):
     from meshcore import MeshCore
