@@ -98,11 +98,12 @@ class Database:
             c.execute("DELETE FROM catalog_metadata");c.executemany("INSERT INTO catalog_metadata VALUES(?,?)",metadata.items());c.execute("COMMIT")
     def coverage(self):
         with self.connect() as c:return c.execute("SELECT * FROM coverage_counties ORDER BY state,name").fetchall()
-    def save_coverage(self, ugcs):
+    def save_coverage(self, ugcs, allowed_states=None):
         with self.connect() as c:
             rows=c.execute("SELECT * FROM county_catalog WHERE ugc IN (%s)" % ",".join("?"*len(ugcs)),ugcs).fetchall() if ugcs else []
             if not rows: raise ValueError("select at least one catalog county; unrestricted monitoring is not allowed")
             if len(rows)!=len(set(ugcs)): raise ValueError("one or more selected counties are not in the catalog")
+            if allowed_states and any(r["state"] not in allowed_states for r in rows): raise ValueError("select only counties in configured NWS states; update config.yml explicitly before expanding polling")
             c.execute("BEGIN IMMEDIATE");c.execute("DELETE FROM coverage_counties");c.executemany("INSERT INTO coverage_counties VALUES(?,?,?,?,?)",[(r["ugc"],r["state"],r["name"],r["same"],now()) for r in rows]);c.execute("COMMIT")
     def migrate_coverage(self, rows):
         if self.setting("coverage_migrated"): return

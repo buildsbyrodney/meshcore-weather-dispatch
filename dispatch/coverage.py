@@ -21,9 +21,15 @@ def normalize_catalog(data):
     return rows
 
 def fetch_catalog(user_agent):
-    response=requests.get(NWS_COUNTIES_URL,headers={"User-Agent":user_agent,"Accept":"application/geo+json"},timeout=30)
-    response.raise_for_status(); rows=normalize_catalog(response.json())
-    return rows,{"source":NWS_COUNTIES_URL,"retrieved_at":datetime.now(timezone.utc).isoformat(),"version":response.headers.get("ETag") or response.headers.get("Last-Modified") or "not supplied"}
+    url=NWS_COUNTIES_URL; features=[]; version="not supplied"
+    # NWS may paginate nationwide zone responses. Follow only same-service next URLs.
+    while url:
+        response=requests.get(url,headers={"User-Agent":user_agent,"Accept":"application/geo+json"},timeout=30)
+        response.raise_for_status(); data=response.json();features.extend(data.get("features",[]));version=response.headers.get("ETag") or response.headers.get("Last-Modified") or version
+        url=(data.get("pagination") or {}).get("next")
+        if url and not str(url).startswith("https://api.weather.gov/"): raise CatalogError("catalog pagination returned an untrusted URL")
+    rows=normalize_catalog({"features":features})
+    return rows,{"source":NWS_COUNTIES_URL,"retrieved_at":datetime.now(timezone.utc).isoformat(),"version":version}
 
 def config_rows(values):
     rows=[]

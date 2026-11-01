@@ -95,7 +95,7 @@ def coverage_counties_page():
    elif action=="save":
     selected=request.form.getlist("county")
     if len(selected)>25 and request.form.get("confirm_expand")!="yes": raise CatalogError("confirm this coverage expansion before saving")
-    db.save_coverage(selected);db.audit(None,"coverage_counties_saved",session["user"],f"{len(selected)} counties selected");flash("Coverage counties saved. New NWS polls and Test Alerts use them immediately.")
+    db.save_coverage(selected,{str(x).upper() for x in current_app.config.get("states",[])});db.audit(None,"coverage_counties_saved",session["user"],f"{len(selected)} counties selected");flash("Coverage counties saved. New NWS polls and Test Alerts use them immediately.")
   except (CatalogError,ValueError,requests.RequestException) as exc: flash(f"Coverage was not changed: {exc}")
   return redirect(url_for("console.coverage_counties_page"))
  state=request.args.get("state","");query=request.args.get("q","");selected={r["ugc"] for r in db.coverage()}

@@ -437,7 +437,7 @@ def test_county_catalog_import_validation_and_coverage_persistence(tmp_path):
  assert len(db.catalog())==2 and eligible({"properties":{"event":"Tornado Warning","geocode":{"UGC":["TNC103"]}}},app.config)
 
 def test_coverage_page_import_state_filter_and_fail_closed_save(tmp_path,monkeypatch):
- app=create_app(config(tmp_path));db=app.extensions["db"];client=app.test_client()
+ cfg=config(tmp_path);cfg["states"]=["AL","TN"];app=create_app(cfg);db=app.extensions["db"];client=app.test_client()
  with client.session_transaction() as s:s["user"]="admin"
  rows=normalize_catalog({"features":[{"properties":{"id":"ALC089","name":"Madison"}},{"properties":{"id":"TNC103","name":"Lincoln"}}]})
  monkeypatch.setattr("dispatch.routes.fetch_catalog",lambda ua:(rows,{"source":"official","retrieved_at":"today","version":"v1"}))
