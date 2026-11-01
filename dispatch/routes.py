@@ -6,7 +6,7 @@ from flask import Blueprint, current_app, flash, redirect, render_template, requ
 from werkzeug.security import check_password_hash
 from .devices import scan_devices, resolve_device
 from .messages import append_comment
-from .meshcore_adapter import send, verify_connection, verify_channel, list_channels, discover_channels, add_hashtag_channel, RadioError
+from .meshcore_adapter import send, verify_connection, verify_channel, list_channels, discover_channels, add_hashtag_channel, read_device_name, set_device_name, message_limit, RadioError
 from .timefmt import local_time, valid_timezones, system_timezone
 
 bp=Blueprint("console",__name__)
@@ -41,7 +41,7 @@ def logout(): session.clear();return redirect(url_for("console.login"))
 @admin
 def index():
  db=current_app.extensions["db"];last,error,health=feed_state(db)
- return render_template("index.html",alerts=db.actionable(),history=db.history(),cap=current_app.config.get("max_message_bytes",180),last_sync=last,feed_error=error,feed_health=health,tx_channel=saved_channel(db))
+ return render_template("index.html",alerts=db.actionable(),history=db.history(),cap=message_limit(current_app.config),last_sync=last,feed_error=error,feed_health=health,tx_channel=saved_channel(db),device_name=db.setting("device_name") or "unknown")
 @bp.get("/api/state")
 @admin
 def state():
@@ -120,6 +120,27 @@ def add_channel():
   db.save_setting("tx_channel","null");flash(f"Added {created['name']} in slot {created['index']}. Re-select transmit channel before sending.")
  except (ValueError,RadioError) as exc: flash(f"Channel was not added: {status}. {exc}")
  return redirect(url_for("console.settings"))
+@bp.post("/settings/device-name")
+@admin
+def device_name():
+ db=current_app.extensions["db"];_,dev,status=device_state(db)
+ try:
+  name=set_device_name(dev,request.form.get("name",""));db.save_setting("device_name",name);flash(f"Companion device name saved: {name}.")
+ except RadioError as exc: flash(f"Device name not saved: {status}. {exc}")
+ return redirect(url_for("console.settings"))
+@bp.route("/test-messaging",methods=["GET","POST"])
+@admin
+def test_messaging():
+ db=current_app.extensions["db"];channel=saved_channel(db);_,dev,status=device_state(db)
+ if request.method=="POST":
+  message=request.form.get("message","")
+  if not message or len(message.encode("utf-8"))>message_limit(current_app.config): flash("Test message rejected: empty or exceeds byte limit.")
+  elif request.form.get("confirm")!="yes": flash("Test message not sent: confirmation required.")
+  else:
+   try:
+    verify_channel(dev,channel);detail=send(current_app.config,dev,channel,message);outcome="simulated" if current_app.config.get("dry_run") else "accepted";db.test_message(session["user"],channel,message,outcome,detail);flash(f"Test result: {outcome}. {detail}")
+   except RadioError as exc: db.test_message(session["user"],channel or {"name":"none","index":-1},message,"failed",str(exc));flash(f"Test message failed: {status}. {exc}")
+ return render_template("test_messaging.html",channel=channel,device_name=db.setting("device_name") or "unknown",status=status,cap=message_limit(current_app.config),history=db.test_history(),enabled=bool(channel and dev and current_app.config.get("transmit_enabled") and __import__('os').environ.get("MESHCORE_SEND_ENABLED")=="1"))
 @bp.post("/settings/test")
 @admin
 def test_device():

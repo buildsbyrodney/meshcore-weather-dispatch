@@ -1,8 +1,9 @@
 """Conservative, read-first adapter for the official ``meshcore`` library."""
 from __future__ import annotations
-import asyncio, os, hashlib, re
+import asyncio, os, hashlib, re, threading
 
 READ_TIMEOUT = 10
+radio_lock = threading.Lock()
 class RadioError(Exception): pass
 
 async def _close(radio):
@@ -114,7 +115,40 @@ def send(config: dict, device: dict | None, channel: dict, message: str) -> str:
     if not config.get("transmit_enabled") or os.environ.get("MESHCORE_SEND_ENABLED") != "1":
         raise RadioError("transmission is disabled (set config and explicit environment interlock)")
     if not device: raise RadioError("no verified Companion device")
-    return asyncio.run(_send_serial(device["device"], int(channel["index"]), message))
+    with radio_lock: return asyncio.run(_send_serial(device["device"], int(channel["index"]), message))
+
+def message_limit(config: dict) -> int: return int(config.get("max_message_bytes",180))
+
+def read_device_name(device: dict | None) -> str:
+    if not device: raise RadioError("no verified Companion device")
+    return asyncio.run(_read_name(device["device"]))
+async def _read_name(path):
+    from meshcore import EventType
+    radio=await _open(path)
+    try:
+        result=await asyncio.wait_for(radio.commands.send_appstart(),READ_TIMEOUT)
+        if result.type==EventType.ERROR: raise RadioError(f"Companion name query failed: {result.payload}")
+        payload=result.payload or {}; name=payload.get("name") if isinstance(payload,dict) else getattr(payload,"name",None)
+        return str(name or "")
+    finally: await _close(radio)
+def set_device_name(device: dict | None, name: str) -> str:
+    if not device: raise RadioError("no verified Companion device")
+    if not name or "\n" in name or "\r" in name: raise RadioError("device name must be a single non-empty line")
+    return asyncio.run(_set_name(device["device"],name))
+async def _set_name(path,name):
+    from meshcore import EventType
+    radio=await _open(path)
+    try:
+        info=await asyncio.wait_for(radio.commands.send_device_query(),READ_TIMEOUT); payload=info.payload or {}
+        maximum=(payload.get("max_name_len") or payload.get("max_name_length")) if isinstance(payload,dict) else None
+        if not isinstance(maximum,int): raise RadioError("firmware did not report supported device-name length")
+        if len(name.encode("utf-8"))>maximum: raise RadioError(f"device name exceeds firmware limit of {maximum} UTF-8 bytes")
+        result=await asyncio.wait_for(radio.commands.set_name(name),READ_TIMEOUT)
+        if result.type==EventType.ERROR: raise RadioError(f"Companion rejected name: {result.payload}")
+    finally: await _close(radio)
+    actual=await _read_name(path)
+    if actual!=name: raise RadioError("device-name write was not verified by read-back")
+    return actual
 
 async def _send_serial(path: str, channel_index: int, message: str) -> str:
     from meshcore import EventType
