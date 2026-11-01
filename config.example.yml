@@ -12,6 +12,12 @@ start_poller: true
 # Set true only when the reverse proxy serves HTTPS (recommended for deployment).
 session_cookie_secure: true
 states: [AL]
+# Strings remain supported. For named Test Alert checkboxes, use structured
+# entries with their proper NWS SAME and/or UGC identifiers instead.
+# counties:
+#   - name: Madison County, AL
+#     same: "001089"
+#     ugc: ALC089
 counties: []
 alert_types: ["Tornado Warning", "Severe Thunderstorm Warning", "Flash Flood Warning"]
 # Select a read-only discovered Companion channel in Settings after installation.

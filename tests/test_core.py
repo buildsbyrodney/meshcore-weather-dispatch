@@ -6,6 +6,8 @@ from dispatch import create_app
 from dispatch.messages import append_comment, truncate_utf8
 from dispatch.devices import resolve_device
 from dispatch.poller import ingest, fetch, eligible, cap_reference_ids
+from dispatch.poller import coverage_counties
+from dispatch.test_alerts import build_test_alert
 import dispatch.meshcore_adapter as adapter
 from dispatch.meshcore_adapter import RadioError, verify_channel, hashtag_secret, validate_hashtag, set_device_name
 from dispatch.timefmt import local_time
@@ -75,6 +77,75 @@ def test_actual_nws_geocodes_support_partial_and_multi_county_alerts():
  assert eligible(multi,{"alert_types":["Tornado Warning"],"counties":["01083"]})
  assert not eligible(partial,{"alert_types":["Tornado Warning"],"counties":["01083"]})
  assert cap_reference_ids("w-nws.webmaster@noaa.gov,urn:oid:2.49.0.1,2026-01-01T00:00:00-00:00")==["urn:oid:2.49.0.1"]
+
+def test_test_alert_single_county_uses_configured_identifiers(tmp_path):
+ cfg=config(tmp_path);cfg["counties"]=[{"name":"Madison County, AL","same":"001089","ugc":"ALC089"}]
+ choice=coverage_counties(cfg)[0]; feature=build_test_alert(cfg,[choice["id"]],"Tornado Warning")
+ props=feature["properties"]
+ assert props["test_only"] and props["geocode"]=={"SAME":["001089"],"UGC":["ALC089"]}
+ app=create_app(cfg);ingest(app,[feature]);alert=app.extensions["db"].get(props["id"])
+ assert alert["test_only"]==1 and alert["status"]=="pending" and alert["message"].startswith("TEST ONLY NWS")
+
+def test_test_alert_multi_county_cross_state_is_one_alert(tmp_path):
+ cfg=config(tmp_path);cfg["states"]=["AL","TN"];cfg["counties"]=[{"name":"Madison County, AL","same":"001089","ugc":"ALC089"},{"name":"Lincoln County, TN","same":"047103","ugc":"TNC103"}]
+ choices=coverage_counties(cfg); feature=build_test_alert(cfg,[x["id"] for x in choices],"Tornado Warning")
+ assert feature["properties"]["geocode"]=={"SAME":["001089","047103"],"UGC":["ALC089","TNC103"]}
+ app=create_app(cfg);ingest(app,[feature]); alerts=app.extensions["db"].actionable()
+ assert len(alerts)==1 and "Madison County, AL, Lincoln County, TN"==alerts[0]["areas"]
+
+def test_test_alert_route_requires_county_and_uses_manual_workflow(tmp_path):
+ cfg=config(tmp_path);cfg["counties"]=[{"name":"Madison County, AL","same":"001089","ugc":"ALC089"}]
+ app=create_app(cfg);client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ page=client.get("/test-alerts").data.decode();token=page.split('name="csrf_token" value="')[1].split('"')[0]
+ client.post("/test-alerts",data={"csrf_token":token,"event":"Tornado Warning"})
+ assert not app.extensions["db"].actionable()
+ choice=coverage_counties(cfg)[0]
+ client.post("/test-alerts",data={"csrf_token":token,"event":"Tornado Warning","county":choice["id"]})
+ alert=app.extensions["db"].actionable()[0]
+ assert "TEST ONLY" in alert["revision_label"] and app.extensions["db"].history()[0]["action"]=="test_alert_created"
+
+def test_test_alert_maximum_length_keeps_test_marker_and_all_counties(tmp_path):
+ cfg=config(tmp_path);cfg["max_message_bytes"]=80;cfg["counties"]= [{"name":f"Very Long County Name {n}","same":f"01{n:04d}"} for n in range(20)]
+ feature=build_test_alert(cfg,[x["id"] for x in coverage_counties(cfg)],"Tornado Warning")
+ app=create_app(cfg);ingest(app,[feature]);alert=app.extensions["db"].get(feature["properties"]["id"])
+ assert len(alert["message"].encode("utf-8"))<=80 and alert["message"].startswith("TEST ONLY NWS")
+ assert len(feature["properties"]["geocode"]["SAME"])==20
+
+def test_test_alert_revisions_and_cancel_do_not_alter_genuine_family(tmp_path):
+ cfg=config(tmp_path);cfg["counties"]=[{"name":"Madison County, AL","same":"001089","ugc":"ALC089"}]
+ app=create_app(cfg);db=app.extensions["db"];ingest(app,[feature("real")])
+ choice=coverage_counties(cfg)[0]; first=build_test_alert(cfg,[choice["id"]],"Tornado Warning")
+ # A forged reference to a real CAP ID must not join or alter that family.
+ first["properties"]["references"]="sender,real,when";ingest(app,[first])
+ update=build_test_alert(cfg,[choice["id"]],"Tornado Warning")
+ update["properties"].update({"references":f"sender,{first['properties']['id']},when","description":"TEST ONLY changed instruction"});ingest(app,[update])
+ cancel=build_test_alert(cfg,[choice["id"]],"Tornado Warning")
+ cancel["properties"].update({"references":f"sender,{update['properties']['id']},when","messageType":"Cancel"});ingest(app,[cancel])
+ assert db.get("real")["status"]=="pending"
+ assert db.get(first["properties"]["id"])["status"]=="superseded"
+ assert db.get(update["properties"]["id"])["status"]=="canceled"
+ assert db.get(cancel["properties"]["id"])["status"]=="canceled"
+ assert all("TEST ONLY" in (row["detail"] or "") for row in db.history() if row["cap_id"] != "real")
+
+def test_test_alert_creation_never_uses_radio_and_manual_comment_stays_capped(tmp_path,monkeypatch):
+ cfg=config(tmp_path);cfg["max_message_bytes"]=120;cfg["counties"]=[{"name":"Madison County, AL","same":"001089","ugc":"ALC089"}]
+ app=create_app(cfg);db=app.extensions["db"];client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ monkeypatch.setattr("dispatch.routes.send",lambda *a: (_ for _ in ()).throw(AssertionError("test-alert creation must not send")))
+ monkeypatch.setattr("dispatch.routes.verify_channel",lambda *a: (_ for _ in ()).throw(AssertionError("test-alert creation must not verify radio")))
+ token=client.get("/test-alerts").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
+ choice=coverage_counties(cfg)[0]
+ client.post("/test-alerts",data={"csrf_token":token,"event":"Tornado Warning","county":choice["id"]})
+ alert=db.actionable()[0];captured=[]
+ monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/fake"},"Connected"))
+ monkeypatch.setattr("dispatch.routes.verify_channel",lambda *a:None)
+ monkeypatch.setattr("dispatch.routes.send",lambda config,device,channel,message: captured.append(message) or "dry-run")
+ db.save_setting("tx_channel",'{"index":1,"name":"#bench"}')
+ page=client.get("/").data.decode();token=page.split('name="csrf_token" value="')[1].split('"')[0]
+ client.post(f"/alerts/{alert['cap_id']}/send",data={"csrf_token":token,"comment":"é"*100})
+ assert len(captured)==1 and len(captured[0].encode("utf-8"))<=120 and captured[0].startswith("TEST ONLY")
+ assert "TEST ONLY" in db.history()[0]["detail"]
 
 def test_dry_run_send_is_audited(tmp_path,monkeypatch):
  app=create_app(config(tmp_path)); ingest(app,[feature()]); client=app.test_client()

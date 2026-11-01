@@ -8,6 +8,8 @@ from .devices import scan_devices, resolve_device
 from .messages import append_comment
 from .meshcore_adapter import send, verify_connection, verify_channel, list_channels, discover_channels, add_hashtag_channel, delete_channel, read_device_name, set_device_name, message_limit, RadioError
 from .timefmt import local_time, valid_timezones, system_timezone
+from .poller import ingest, eligible, coverage_counties
+from .test_alerts import build_test_alert, TestAlertError
 
 bp=Blueprint("console",__name__)
 def admin(fn):
@@ -157,6 +159,21 @@ def test_messaging():
     verify_channel(dev,channel);detail=send(current_app.config,dev,channel,message);outcome="simulated" if current_app.config.get("dry_run") else "accepted";db.test_message(session["user"],channel,message,outcome,detail);flash(f"Test result: {outcome}. {detail}")
    except RadioError as exc: db.test_message(session["user"],channel or {"name":"none","index":-1},message,"failed",str(exc));flash(f"Test message failed: {status}. {exc}")
  return render_template("test_messaging.html",channel=channel,device_name=db.setting("device_name") or "unknown",status=status,cap=message_limit(current_app.config),history=db.test_history(),enabled=bool(channel and dev and current_app.config.get("transmit_enabled") and __import__('os').environ.get("MESHCORE_SEND_ENABLED")=="1"))
+@bp.route("/test-alerts",methods=["GET","POST"])
+@admin
+def test_alerts():
+ db=current_app.extensions["db"]; counties=coverage_counties(current_app.config)
+ if request.method=="POST":
+  try:
+   feature=build_test_alert(current_app.config,request.form.getlist("county"),request.form.get("event",""))
+   # Reuse the real eligibility, shortening, expiry, and manual-dispatch path.
+   # This route never contacts NWS or the Companion.
+   if not eligible(feature,current_app.config): raise TestAlertError("synthetic warning does not match configured coverage")
+   ingest(current_app,[feature]); db.audit(feature["properties"]["id"],"test_alert_created",session["user"],"TEST ONLY synthetic warning created")
+   flash("TEST ONLY warning created. It is awaiting the normal manual Send to Mesh or Ignore decision.")
+   return redirect(url_for("console.index"))
+  except TestAlertError as exc: flash(f"TEST ONLY warning was not created: {exc}")
+ return render_template("test_alerts.html",counties=counties,alert_types=current_app.config.get("alert_types",[]))
 @bp.post("/settings/test")
 @admin
 def test_device():

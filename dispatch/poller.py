@@ -14,9 +14,30 @@ def cap_reference_ids(references) -> list[str]:
     if not isinstance(references, str): return []
     return [parts[1].strip() for item in references.split() if len(parts := item.strip().split(",")) >= 2 and parts[1].strip()]
 
+def _codes(value):
+    values=value if isinstance(value,(list,tuple)) else [value]
+    return [normalize_geo_code(str(code).rstrip("/").rsplit("/",1)[-1]) for code in values if str(code).strip()]
+
+def coverage_counties(cfg) -> list[dict]:
+    """Return configured coverage choices without inventing county identities."""
+    choices=[]; seen=set()
+    for value in cfg.get("counties",[]):
+        if isinstance(value,dict):
+            same=_codes(value.get("same",value.get("SAME",[])))
+            ugc=_codes(value.get("ugc",value.get("UGC",[])))
+            label=str(value.get("name") or " / ".join(same+ugc)).strip()
+        else:
+            code=_codes(value); same=[x for x in code if x.isdigit()]; ugc=[x for x in code if not x.isdigit()]
+            label=" / ".join(same+ugc)
+        if not label or not (same or ugc): continue
+        key="same:"+",".join(sorted(same))+"|ugc:"+",".join(sorted(ugc))
+        if key in seen: continue
+        seen.add(key); choices.append({"id":key,"label":label,"same":same,"ugc":ugc})
+    return choices
+
 def configured_counties(cfg) -> set[str]:
     """Accept NWS SAME FIPS, UGC codes, and the final segment of an NWS URL."""
-    return {normalize_geo_code(str(value).rstrip("/").rsplit("/",1)[-1]) for value in cfg.get("counties",[]) if str(value).strip()}
+    return {code for county in coverage_counties(cfg) for code in county["same"]+county["ugc"]}
 
 def normalize_geo_code(value: str) -> str:
     value=value.upper()
@@ -41,6 +62,9 @@ def content_fingerprint(props: dict) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 def mark(c, cap_id, status, detail=None):
+    row=c.execute("SELECT test_only FROM alerts WHERE cap_id=?",(cap_id,)).fetchone()
+    if row and row["test_only"]:
+        detail=f"TEST ONLY — {detail or status}"
     c.execute("UPDATE alerts SET status=?,updated_at=? WHERE cap_id=?",(status,now(),cap_id))
     c.execute("INSERT INTO audit(cap_id,action,detail,created_at) VALUES(?,?,?,?)",(cap_id,status,detail,now()))
 
@@ -48,17 +72,17 @@ def ingest(app, features):
     db=app.extensions["db"]; cfg=app.config
     for f in features:
         p=f["properties"]; cap_id=p["id"]
-        references=cap_reference_ids(p.get("references"))
+        test_only=bool(p.get("test_only")); references=cap_reference_ids(p.get("references"))
         with db.connect() as c:
             existing=c.execute("SELECT cap_id FROM alerts WHERE cap_id=?",(cap_id,)).fetchone()
             if existing: continue
-            prior_rows=c.execute("SELECT * FROM alerts WHERE cap_id IN (%s) ORDER BY created_at DESC" % ",".join("?"*len(references)),references).fetchall() if references else []
+            prior_rows=c.execute("SELECT * FROM alerts WHERE cap_id IN (%s) AND test_only=? ORDER BY created_at DESC" % ",".join("?"*len(references)),(*references,int(test_only))).fetchall() if references else []
             family_id=prior_rows[0]["family_id"] if prior_rows and prior_rows[0]["family_id"] else (prior_rows[0]["cap_id"] if prior_rows else cap_id)
             fingerprint=content_fingerprint(p)
             cancel=(p.get("messageType") or "").lower()=="cancel"
             # A cancellation closes actionable revisions but never changes sent/ignored history.
             if cancel:
-                for row in c.execute("SELECT cap_id FROM alerts WHERE family_id=? AND status IN ('pending','sending')",(family_id,)).fetchall(): mark(c,row["cap_id"],"canceled",cap_id)
+                for row in c.execute("SELECT cap_id FROM alerts WHERE family_id=? AND test_only=? AND status IN ('pending','sending')",(family_id,int(test_only))).fetchall(): mark(c,row["cap_id"],"canceled",cap_id)
                 status="canceled"; label="Cancellation"
             else:
                 same=next((r for r in prior_rows if r["content_hash"]==fingerprint),None)
@@ -67,19 +91,19 @@ def ingest(app, features):
                 else:
                     # References sometimes point only at the immediately prior CAP
                     # revision. Preserve the operator context from the full family.
-                    prior_statuses={r["status"] for r in c.execute("SELECT status FROM alerts WHERE family_id=?",(family_id,)).fetchall()}
-                    for row in c.execute("SELECT cap_id FROM alerts WHERE family_id=? AND status IN ('pending','sending')",(family_id,)).fetchall(): mark(c,row["cap_id"],"superseded",cap_id)
+                    prior_statuses={r["status"] for r in c.execute("SELECT status FROM alerts WHERE family_id=? AND test_only=?",(family_id,int(test_only))).fetchall()}
+                    for row in c.execute("SELECT cap_id FROM alerts WHERE family_id=? AND test_only=? AND status IN ('pending','sending')",(family_id,int(test_only))).fetchall(): mark(c,row["cap_id"],"superseded",cap_id)
                     status="pending"
                     label="Updated Warning — Previously Sent" if "sent" in prior_statuses else ("Updated Warning — Previously Ignored" if "ignored" in prior_statuses else ("Updated Warning" if prior_rows else "New Warning"))
             if iso_past(p.get("expires")): status="expired"
+            if test_only: label=f"TEST ONLY — {label}"
             message=radio_message(f,cfg.get("max_message_bytes",180))
-            c.execute("INSERT INTO alerts(cap_id,family_id,content_hash,revision_label,event,headline,description,areas,sent,effective,expires,status,message,replaces_id,raw_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(cap_id,family_id,fingerprint,label,p.get("event",""),p.get("headline"),p.get("description"),p.get("areaDesc"),p.get("sent"),p.get("effective"),p.get("expires"),status,message,references[0] if references else None,json.dumps(f),now(),now()))
+            c.execute("INSERT INTO alerts(cap_id,family_id,content_hash,revision_label,event,headline,description,areas,sent,effective,expires,status,message,replaces_id,raw_json,test_only,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(cap_id,family_id,fingerprint,label,p.get("event",""),p.get("headline"),p.get("description"),p.get("areaDesc"),p.get("sent"),p.get("effective"),p.get("expires"),status,message,references[0] if references else None,json.dumps(f),int(test_only),now(),now()))
             c.execute("INSERT INTO audit(cap_id,action,detail,message,created_at) VALUES(?,?,?,?,?)",(cap_id,status,label,message,now()))
     with db.connect() as c:
         rows=c.execute("SELECT cap_id FROM alerts WHERE status='pending' AND expires IS NOT NULL AND expires <= ?",(now(),)).fetchall()
         for r in rows:
-            c.execute("UPDATE alerts SET status='expired',updated_at=? WHERE cap_id=?",(now(),r[0]))
-            c.execute("INSERT INTO audit(cap_id,action,detail,created_at) VALUES(?,?,?,?)",(r[0],"expired","local expiration",now()))
+            mark(c,r[0],"expired","local expiration")
 
 def fetch(app):
     cfg=app.config; params=[]

@@ -7,7 +7,7 @@ SCHEMA = '''
 CREATE TABLE IF NOT EXISTS alerts (
  cap_id TEXT PRIMARY KEY, family_id TEXT, content_hash TEXT, revision_label TEXT, event TEXT NOT NULL, headline TEXT, description TEXT,
  areas TEXT, sent TEXT, effective TEXT, expires TEXT, status TEXT NOT NULL DEFAULT 'pending',
- message TEXT NOT NULL, replaces_id TEXT, raw_json TEXT, created_at TEXT NOT NULL,
+ message TEXT NOT NULL, replaces_id TEXT, raw_json TEXT, test_only INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
  updated_at TEXT NOT NULL, claimed_by TEXT, claimed_at TEXT
 );
 CREATE TABLE IF NOT EXISTS audit (
@@ -33,7 +33,7 @@ class Database:
         with self.connect() as c:
             c.executescript(SCHEMA)
             columns={row[1] for row in c.execute("PRAGMA table_info(alerts)")}
-            for name, kind in (("family_id","TEXT"),("content_hash","TEXT"),("revision_label","TEXT")):
+            for name, kind in (("family_id","TEXT"),("content_hash","TEXT"),("revision_label","TEXT"),("test_only","INTEGER NOT NULL DEFAULT 0")):
                 if name not in columns: c.execute(f"ALTER TABLE alerts ADD COLUMN {name} {kind}")
             c.execute("CREATE INDEX IF NOT EXISTS idx_alert_family ON alerts(family_id, created_at)")
     def audit(self, cap_id, action, actor=None, detail=None, message=None):
@@ -61,7 +61,10 @@ class Database:
             c.execute("COMMIT"); return True
     def finish(self, cap_id, status, actor, detail=None, message=None):
         with self.connect() as c:
+            row=c.execute("SELECT test_only FROM alerts WHERE cap_id=?",(cap_id,)).fetchone()
             c.execute("UPDATE alerts SET status=?, updated_at=? WHERE cap_id=?", (status, now(), cap_id))
+        if row and row["test_only"]:
+            detail=f"TEST ONLY — {detail or status}"
         self.audit(cap_id, status, actor, detail, message)
     def get(self, cap_id):
         with self.connect() as c: return c.execute("SELECT * FROM alerts WHERE cap_id=?", (cap_id,)).fetchone()
