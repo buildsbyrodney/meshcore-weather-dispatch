@@ -8,6 +8,7 @@ from flask import Flask
 from flask_wtf.csrf import CSRFProtect
 from .db import Database
 from .routes import bp
+from .timefmt import local_time
 
 csrf = CSRFProtect()
 
@@ -18,10 +19,6 @@ def validate_config(config: dict) -> None:
         raise ValueError("poll_seconds must be at least 30 to respect NWS rate guidance")
     if int(config.get("max_message_bytes", 180)) < 1:
         raise ValueError("max_message_bytes must be positive")
-    if not config.get("channels"):
-        raise ValueError("at least one configured MeshCore channel is required")
-    if int(config.get("channel_index", 0)) < 0:
-        raise ValueError("channel_index must not be negative")
 
 def load_config(path: str | None = None) -> dict:
     path = path or os.environ.get("WEATHER_DISPATCH_CONFIG", "config.yml")
@@ -43,6 +40,7 @@ def create_app(test_config: dict | None = None) -> Flask:
                       SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
                       SESSION_COOKIE_SECURE=bool(config.get("session_cookie_secure", False)))
     app.extensions["db"] = Database(app.config["database"])
+    app.jinja_env.filters["localtime"] = lambda value: local_time(value, app.config.get("timezone", "UTC"))
     app.extensions["db"].initialize()
     csrf.init_app(app)
     app.register_blueprint(bp)

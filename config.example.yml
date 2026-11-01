@@ -6,6 +6,7 @@ admin_username: admin
 admin_password_hash: "REPLACE_WITH_WERKZEUG_HASH"
 nws_user_agent: "MeshCoreWeatherDispatch/0.1 admin@example.invalid"
 poll_seconds: 60
+timezone: America/Chicago
 # The supplied systemd unit uses one worker; leave this enabled for NWS polling.
 start_poller: true
 # Set true only when the reverse proxy serves HTTPS (recommended for deployment).
@@ -13,9 +14,7 @@ session_cookie_secure: true
 states: [AL]
 counties: []
 alert_types: ["Tornado Warning", "Severe Thunderstorm Warning", "Flash Flood Warning"]
-channels: ["#wx-northal"]
-# This is the existing Companion channel slot to use. The application never creates or changes channels.
-channel_index: 0
+# Select a read-only discovered Companion channel in Settings after installation.
 max_message_bytes: 180
 transmit_enabled: false
 dry_run: true
