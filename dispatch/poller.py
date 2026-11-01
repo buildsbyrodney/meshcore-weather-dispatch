@@ -9,12 +9,29 @@ def iso_past(value):
     try: return datetime.fromisoformat(value.replace("Z", "+00:00")) <= datetime.now(timezone.utc)
     except (ValueError, AttributeError): return False
 
+def cap_reference_ids(references) -> list[str]:
+    """Extract identifiers from CAP `sender,identifier,sent` reference tuples."""
+    if not isinstance(references, str): return []
+    return [parts[1].strip() for item in references.split() if len(parts := item.strip().split(",")) >= 2 and parts[1].strip()]
+
+def configured_counties(cfg) -> set[str]:
+    """Accept NWS SAME FIPS, UGC codes, and the final segment of an NWS URL."""
+    return {normalize_geo_code(str(value).rstrip("/").rsplit("/",1)[-1]) for value in cfg.get("counties",[]) if str(value).strip()}
+
+def normalize_geo_code(value: str) -> str:
+    value=value.upper()
+    # SAME is six digits (subdivision + state FIPS + county FIPS); accept a
+    # shorter user-entered numeric code while comparing it in canonical form.
+    return value.zfill(6) if value.isdigit() and len(value) <= 6 else value
+
 def eligible(feature, cfg):
     p=feature["properties"]
     if p.get("event") not in cfg.get("alert_types", []): return False
-    counties=cfg.get("counties", [])
+    counties=configured_counties(cfg)
     if not counties: return True
-    codes=set((p.get("geocode") or {}).get("SAME") or [])
+    geocode=p.get("geocode") or {}
+    # A null/missing geometry is immaterial: no polygon parsing is performed.
+    codes={normalize_geo_code(str(code)) for code in (geocode.get("SAME") or [])+(geocode.get("UGC") or [])}
     return bool(codes & set(counties))
 
 def content_fingerprint(props: dict) -> str:
@@ -31,11 +48,7 @@ def ingest(app, features):
     db=app.extensions["db"]; cfg=app.config
     for f in features:
         p=f["properties"]; cap_id=p["id"]
-        # CAP References tuples are sender,identifier,sent (RFC 8633 / CAP profile).
-        references=[]
-        for item in (p.get("references") or "").split():
-            pieces=item.strip().split(",")
-            if len(pieces) >= 2: references.append(pieces[1])
+        references=cap_reference_ids(p.get("references"))
         with db.connect() as c:
             existing=c.execute("SELECT cap_id FROM alerts WHERE cap_id=?",(cap_id,)).fetchone()
             if existing: continue
@@ -52,7 +65,9 @@ def ingest(app, features):
                 if same:
                     status="unchanged"; label="Unchanged revision"
                 else:
-                    prior_statuses={r["status"] for r in prior_rows}
+                    # References sometimes point only at the immediately prior CAP
+                    # revision. Preserve the operator context from the full family.
+                    prior_statuses={r["status"] for r in c.execute("SELECT status FROM alerts WHERE family_id=?",(family_id,)).fetchall()}
                     for row in c.execute("SELECT cap_id FROM alerts WHERE family_id=? AND status IN ('pending','sending')",(family_id,)).fetchall(): mark(c,row["cap_id"],"superseded",cap_id)
                     status="pending"
                     label="Updated Warning — Previously Sent" if "sent" in prior_statuses else ("Updated Warning — Previously Ignored" if "ignored" in prior_statuses else ("Updated Warning" if prior_rows else "New Warning"))
@@ -68,7 +83,7 @@ def ingest(app, features):
 
 def fetch(app):
     cfg=app.config; params=[]
-    for state in cfg.get("states",[]): params.append(("area",state))
+    for state in cfg.get("states",[]): params.append(("area",state.upper()))
     try:
         response=requests.get(NWS, params=params, headers={"User-Agent":cfg["nws_user_agent"],"Accept":"application/geo+json"}, timeout=15)
         response.raise_for_status(); data=response.json()

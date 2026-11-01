@@ -40,7 +40,11 @@ def index():
 @admin
 def state():
  db=current_app.extensions["db"]
- return jsonify(alerts=[dict(x) for x in db.actionable()],history=[dict(x) for x in db.history()],nws_last_success=db.setting("nws_last_success"),nws_last_error=db.setting("nws_last_error"))
+ alerts=db.actionable(); history=db.history(); last=db.setting("nws_last_success"); error=db.setting("nws_last_error"); stale=True
+ if last:
+  try: stale=(datetime.now(timezone.utc)-datetime.fromisoformat(last)).total_seconds()>current_app.config.get("poll_seconds",60)*3
+  except ValueError: pass
+ return jsonify(alerts_html=render_template("_alerts.html",alerts=alerts,cap=current_app.config.get("max_message_bytes",180)),history_html=render_template("_history.html",history=history),nws_last_success=last,nws_last_error=error,feed_health="stale" if stale else ("error" if error else "healthy"))
 @bp.post("/alerts/<cap_id>/ignore")
 @admin
 def ignore(cap_id):
