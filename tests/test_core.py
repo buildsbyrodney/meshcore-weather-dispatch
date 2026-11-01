@@ -204,6 +204,13 @@ def test_send_rejects_changed_comment_channel_or_expired_alert(tmp_path,monkeypa
  client.post("/alerts/new/send",data={"csrf_token":token,"comment":"Reviewed","confirm":"yes","preview_token":preview["token"]})
  assert not sent and db.get("new")["status"]=="pending"
 
+def test_preview_rejects_an_alert_that_expired_between_polls(tmp_path):
+ cfg=config(tmp_path);cfg["max_message_bytes"]=180;app=create_app(cfg);ingest(app,[feature()]);db=app.extensions["db"];client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ db.save_setting("tx_channel",'{"index": 2, "name": "#wx-test"}')
+ with db.connect() as c:c.execute("UPDATE alerts SET expires='2000-01-01T00:00:00+00:00' WHERE cap_id='new'")
+ assert alert_preview(client,"new",csrf_token(client)).status_code==409
+
 def test_simulated_preview_is_labeled_and_oversize_warning_is_blocked(tmp_path):
  cfg=config(tmp_path);cfg["max_message_bytes"]=40;cfg["counties"]=[{"name":"Madison County, AL","same":"001089","ugc":"ALC089"}]
  app=create_app(cfg);client=app.test_client();db=app.extensions["db"]

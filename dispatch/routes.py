@@ -31,6 +31,14 @@ def feed_state(db):
   try: stale=(datetime.now(timezone.utc)-datetime.fromisoformat(last)).total_seconds()>current_app.config.get("poll_seconds",60)*3
   except ValueError: pass
  return last,error,"stale" if stale else ("error" if error else "healthy")
+def alert_actionability_error(alert):
+ if not alert or alert["status"]!="pending": return "alert is no longer actionable"
+ expires=alert["expires"]
+ if expires:
+  try:
+   if datetime.fromisoformat(expires).astimezone(timezone.utc)<=datetime.now(timezone.utc): return "alert has expired"
+  except (TypeError,ValueError): return "alert expiration is invalid; refusing to dispatch"
+ return None
 def final_alert_message(alert, comment=""):
  return append_comment(radio_message(json.loads(alert["raw_json"]),app_timezone(current_app.extensions["db"])),comment,current_app.config.get("max_message_bytes",180))
 def preview_signer(): return URLSafeTimedSerializer(current_app.config["SECRET_KEY"],salt="dispatch-preview-v1")
@@ -72,13 +80,13 @@ def ignore(cap_id):
 @admin
 def preview_ignore(cap_id):
  db=current_app.extensions["db"];alert=db.get(cap_id)
- if not alert or alert["status"]!="pending": return jsonify(error="alert is no longer actionable"),409
+ if error:=alert_actionability_error(alert): return jsonify(error=error),409
  return jsonify(token=preview_signer().dumps({"jti":uuid4().hex,"action":"ignore","cap_id":cap_id,"updated_at":alert["updated_at"]}))
 @bp.post("/alerts/<cap_id>/preview")
 @admin
 def preview_transmit(cap_id):
  alert=current_app.extensions["db"].get(cap_id)
- if not alert or alert["status"]!="pending": return jsonify(error="alert is no longer actionable"),409
+ if error:=alert_actionability_error(alert): return jsonify(error=error),409
  try:
   comment=request.form.get("comment","");message=final_alert_message(alert,comment);channel=saved_channel(current_app.extensions["db"])
   if not channel: return jsonify(error="no transmit channel selected"),409
@@ -93,7 +101,7 @@ def transmit(cap_id):
  try: preview=preview_signer().loads(request.form.get("preview_token",""),max_age=300)
  except (SignatureExpired,BadSignature): flash("No transmission: preview confirmation expired or is invalid.");return redirect(url_for("console.index"))
  alert=db.get(cap_id)
- if preview.get("cap_id")!=cap_id or not alert or alert["status"]!="pending" or preview.get("updated_at")!=alert["updated_at"] or preview.get("channel")!=channel or preview.get("cap")!=message_limit(current_app.config): flash("No transmission: warning, transmit channel, or message limit changed; review it again.");return redirect(url_for("console.index"))
+ if preview.get("cap_id")!=cap_id or alert_actionability_error(alert) or preview.get("updated_at")!=alert["updated_at"] or preview.get("channel")!=channel or preview.get("cap")!=message_limit(current_app.config): flash("No transmission: warning, transmit channel, or message limit changed; review it again.");return redirect(url_for("console.index"))
  try: message=final_alert_message(alert,request.form.get("comment",""))
  except MessageError as exc: flash(f"No transmission: {exc}");return redirect(url_for("console.index"))
  if preview.get("comment")!=request.form.get("comment","") or preview.get("message")!=message: flash("No transmission: message changed; review it again.");return redirect(url_for("console.index"))
