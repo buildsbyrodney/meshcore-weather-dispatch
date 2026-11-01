@@ -41,7 +41,13 @@ Leave `dry_run: true`, `transmit_enabled: false`, and `MESHCORE_SEND_ENABLED=0`.
 
 ## Configuration
 
-`states` accepts NWS two-letter state codes. `counties` accepts NWS SAME six-digit codes (for example `001089`; shorter numeric input is normalized), UGC county codes (for example `ALC089`), or an NWS URL ending in either code. The filter checks the NWS JSON `geocode.SAME` and `geocode.UGC` values; it intentionally does not inspect polygons, so missing geometry is safe. An alert affecting several counties matches when any configured county matches. Empty county list means all alerts returned by a state feed. `alert_types` is an allowlist. Select exactly one existing regional transmit channel by name in Settings; the application records its radio slot but never changes the radio configuration.
+### Coverage Counties
+
+Use **Settings → Manage Coverage Counties** to import the official NWS county-zone catalog from `api.weather.gov/zones?type=county`. The importer accepts only county (`C`) UGC entries, derives SAME as `0` plus the official state FIPS and county FIPS suffix, and records the source URL, retrieval time, and ETag/Last-Modified value when NWS provides one. The catalog and selected counties are stored separately in SQLite for offline use. A failed or invalid import leaves both the prior catalog and coverage selection unchanged.
+
+The durable SQLite selection takes precedence over `config.yml` after first start. Existing `config.yml` county entries are migrated once, de-duplicated, into that selection; `config.yml` remains only the migration seed thereafter. Back up `dispatch.sqlite3` before upgrades. An empty selection is fail-closed and matches no county alerts—it never enables nationwide monitoring. Saving more than 25 counties requires an explicit confirmation. Changes take effect on the next poll and immediately in Test Alerts; no service restart is required.
+
+`states` accepts NWS two-letter state codes. Legacy `counties` accepts NWS SAME six-digit codes (for example `001089`; shorter numeric input is normalized), UGC county codes (for example `ALC089`), or an NWS URL ending in either code and is migrated once to durable coverage selection. The filter checks the NWS JSON `geocode.SAME` and `geocode.UGC` values; it intentionally does not inspect polygons, so missing geometry is safe. An alert affecting several counties matches when any configured county matches. `alert_types` is an allowlist. Select exactly one existing regional transmit channel by name in Settings; the application records its radio slot but never changes the radio configuration.
 
 ### Test Alerts
 

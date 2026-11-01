@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json
+import json, requests
 from datetime import datetime, timezone
 from functools import wraps
 from flask import Blueprint, current_app, flash, redirect, render_template, request, session, url_for, jsonify
@@ -10,6 +10,7 @@ from .meshcore_adapter import send, verify_connection, verify_channel, list_chan
 from .timefmt import local_time, valid_timezones, system_timezone
 from .poller import ingest, eligible, coverage_counties
 from .test_alerts import build_test_alert, TestAlertError
+from .coverage import fetch_catalog, CatalogError
 
 bp=Blueprint("console",__name__)
 def admin(fn):
@@ -82,6 +83,24 @@ def settings():
   try: radio_name=read_device_name(dev);db.save_setting("device_name",radio_name)
   except RadioError as exc: name_error=str(exc)
  return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,radio_name=radio_name,cached_radio_name=cached_radio_name,name_error=name_error,timezones=valid_timezones(),timezone=app_timezone(db))
+@bp.route("/settings/coverage-counties",methods=["GET","POST"])
+@admin
+def coverage_counties_page():
+ db=current_app.extensions["db"]
+ if request.method=="POST":
+  action=request.form.get("action")
+  try:
+   if action=="import":
+    rows,meta=fetch_catalog(current_app.config["nws_user_agent"]);db.replace_catalog(rows,meta);db.audit(None,"county_catalog_imported",session["user"],f"{len(rows)} counties; {meta['source']}");flash("County catalog imported. Coverage was not changed.")
+   elif action=="save":
+    selected=request.form.getlist("county")
+    if len(selected)>25 and request.form.get("confirm_expand")!="yes": raise CatalogError("confirm this coverage expansion before saving")
+    db.save_coverage(selected,{str(x).upper() for x in current_app.config.get("states",[])});db.audit(None,"coverage_counties_saved",session["user"],f"{len(selected)} counties selected");flash("Coverage counties saved. New NWS polls and Test Alerts use them immediately.")
+  except (CatalogError,ValueError,requests.RequestException) as exc: flash(f"Coverage was not changed: {exc}")
+  return redirect(url_for("console.coverage_counties_page"))
+ state=request.args.get("state","");query=request.args.get("q","");selected={r["ugc"] for r in db.coverage()}
+ catalog=db.catalog(state,query)
+ return render_template("coverage_counties.html",catalog=catalog,visible={r["ugc"] for r in catalog},states=db.catalog_states(),state=state,query=query,selected=selected,coverage=db.coverage(),meta=db.catalog_meta())
 @bp.get("/api/devices")
 @admin
 def devices_api():

@@ -9,6 +9,7 @@ from flask_wtf.csrf import CSRFProtect
 from .db import Database
 from .routes import bp
 from .timefmt import local_time, system_timezone
+from .coverage import config_rows
 
 csrf = CSRFProtect()
 
@@ -42,6 +43,8 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.extensions["db"] = Database(app.config["database"])
     app.jinja_env.filters["localtime"] = lambda value: local_time(value, app.extensions["db"].setting("timezone") or app.config.get("timezone") or system_timezone())
     app.extensions["db"].initialize()
+    app.extensions["db"].migrate_coverage(config_rows(app.config.get("counties",[])))
+    app.config["coverage_db"]=app.extensions["db"]
     csrf.init_app(app)
     app.register_blueprint(bp)
     @app.after_request
