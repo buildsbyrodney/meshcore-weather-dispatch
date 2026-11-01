@@ -75,6 +75,8 @@ Settings can query a selected-but-unsaved detected Companion using a read-only c
 
 Adding a hashtag channel is an explicit administrative configuration action—not a weather dispatch. Enter a public hashtag, choose a confirmed empty slot, tick the confirmation box, and submit. The app derives the documented 16-byte hashtag key from the first 16 bytes of `SHA-256(channel name)`, writes exactly that slot, then reads it back. It never deletes, replaces, renames, or creates channels in the background. Any channel configuration write clears the saved transmit choice, requiring an administrator to select and revalidate it again.
 
+Deleting a channel is similarly explicit: the administrator must confirm the exact name and slot. The Companion is re-read immediately before the documented clear operation (empty name plus zero 16-byte secret) and the slot table is re-read afterward. The Public channel has no Delete control, and the selected transmit channel must be deselected before deletion. Deletion removes that channel configuration from the Companion; it cannot be undone without recreating it and does not affect other slots.
+
 Select any valid IANA time zone in Settings. The application saves this independently of the operating system and renders NWS times, sync time, and activity history in that zone with daylight-saving transitions applied. Timestamps remain stored in UTC.
 
 ## Limits

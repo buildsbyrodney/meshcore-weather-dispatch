@@ -6,7 +6,7 @@ from flask import Blueprint, current_app, flash, redirect, render_template, requ
 from werkzeug.security import check_password_hash
 from .devices import scan_devices, resolve_device
 from .messages import append_comment
-from .meshcore_adapter import send, verify_connection, verify_channel, list_channels, discover_channels, add_hashtag_channel, read_device_name, set_device_name, message_limit, RadioError
+from .meshcore_adapter import send, verify_connection, verify_channel, list_channels, discover_channels, add_hashtag_channel, delete_channel, read_device_name, set_device_name, message_limit, RadioError
 from .timefmt import local_time, valid_timezones, system_timezone
 
 bp=Blueprint("console",__name__)
@@ -119,6 +119,17 @@ def add_channel():
   # Existing saved TX choice must be rechecked after any configuration change.
   db.save_setting("tx_channel","null");flash(f"Added {created['name']} in slot {created['index']}. Re-select transmit channel before sending.")
  except (ValueError,RadioError) as exc: flash(f"Channel was not added: {status}. {exc}")
+ return redirect(url_for("console.settings"))
+@bp.post("/settings/channels/delete")
+@admin
+def remove_channel():
+ db=current_app.extensions["db"];_,dev,status=device_state(db);selected=saved_channel(db)
+ try:
+  slot=int(request.form.get("slot","-1"));name=request.form.get("name","")
+  if request.form.get("confirm")!="yes": raise RadioError("explicit confirmation is required")
+  if selected and selected.get("index")==slot: raise RadioError("deselect the current transmit channel before deleting it")
+  delete_channel(dev,slot,name);db.audit(None,"channel_deleted",session["user"],f"device={dev.get('stable_path') or dev.get('device')}; channel={name}; slot={slot}");flash(f"Deleted {name} from slot {slot}.")
+ except (ValueError,RadioError) as exc: flash(f"Channel was not deleted: {status}. {exc}")
  return redirect(url_for("console.settings"))
 @bp.post("/settings/device-name")
 @admin

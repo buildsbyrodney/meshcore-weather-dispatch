@@ -102,6 +102,25 @@ def add_hashtag_channel(device: dict | None, slot: int, name: str) -> dict:
     if not verified or verified["name"] != name: raise RadioError("channel write was not verified by read-back")
     return {"index":slot,"name":name}
 
+async def _delete_channel_serial(path, slot, expected):
+    from meshcore import EventType
+    radio=await _open(path)
+    try:
+        current=await asyncio.wait_for(radio.commands.get_channel(slot),READ_TIMEOUT)
+        if current.type==EventType.ERROR: raise RadioError("selected slot could not be re-read before deletion")
+        if str(_channel_name(current.payload) or "") != expected: raise RadioError("channel changed since confirmation; deletion blocked")
+        # Official Companion protocol channel-clear operation: empty name + zero 16-byte secret.
+        result=await asyncio.wait_for(radio.commands.set_channel(slot,"",bytes(16)),READ_TIMEOUT)
+        if result.type==EventType.ERROR: raise RadioError(f"Companion rejected channel deletion: {result.payload}")
+    finally: await _close(radio)
+
+def delete_channel(device: dict | None, slot: int, expected: str) -> None:
+    if not device: raise RadioError("no verified Companion device")
+    if expected.strip().casefold() in {"public","#public"}: raise RadioError("Public channel is protected from deletion")
+    asyncio.run(_delete_channel_serial(device["device"],slot,expected))
+    after=discover_channels(device); verified=next((x for x in after["slots"] if x["index"]==slot),None)
+    if not verified or verified["occupied"]: raise RadioError("channel deletion was not verified by read-back")
+
 def verify_channel(device: dict | None, selected: dict | None) -> dict:
     if not selected: raise RadioError("no transmit channel selected")
     channels=list_channels(device)
