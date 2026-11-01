@@ -443,7 +443,7 @@ def test_coverage_page_import_state_filter_and_fail_closed_save(tmp_path,monkeyp
  monkeypatch.setattr("dispatch.routes.fetch_catalog",lambda ua:(rows,{"source":"official","retrieved_at":"today","version":"v1"}))
  token=client.get("/settings/coverage-counties").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
  client.post("/settings/coverage-counties",data={"csrf_token":token,"action":"import"})
- page=client.get("/settings/coverage-counties?state=TN").data.decode();assert 'value="TNC103"' in page and 'value="ALC089"' not in page
+ page=client.get("/settings/coverage-counties?state=TN").data.decode();assert 'value="TNC103"' in page and "Lincoln, TN" in page
  client.post("/settings/coverage-counties",data={"csrf_token":token,"action":"save","county":["ALC089","TNC103"]})
  assert {r["ugc"] for r in db.coverage()}=={"ALC089","TNC103"}
  client.post("/settings/coverage-counties",data={"csrf_token":token,"action":"save"})
