@@ -5,7 +5,7 @@ from functools import wraps
 from flask import Blueprint, current_app, flash, redirect, render_template, request, session, url_for, jsonify
 from werkzeug.security import check_password_hash
 from .devices import scan_devices, resolve_device
-from .messages import append_comment
+from .messages import append_comment, radio_message, MessageError
 from .meshcore_adapter import send, verify_connection, verify_channel, list_channels, discover_channels, add_hashtag_channel, delete_channel, read_device_name, set_device_name, message_limit, RadioError
 from .timefmt import local_time, valid_timezones, system_timezone
 from .poller import ingest, eligible, coverage_counties
@@ -29,6 +29,8 @@ def feed_state(db):
   try: stale=(datetime.now(timezone.utc)-datetime.fromisoformat(last)).total_seconds()>current_app.config.get("poll_seconds",60)*3
   except ValueError: pass
  return last,error,"stale" if stale else ("error" if error else "healthy")
+def final_alert_message(alert, comment=""):
+ return append_comment(radio_message(json.loads(alert["raw_json"]),app_timezone(current_app.extensions["db"])),comment,current_app.config.get("max_message_bytes",180))
 
 @bp.route("/login",methods=["GET","POST"])
 def login():
@@ -57,14 +59,25 @@ def ignore(cap_id):
  if db.claim(cap_id,session["user"]): db.finish(cap_id,"ignored",session["user"])
  else: flash("Alert is no longer actionable.")
  return redirect(url_for("console.index"))
+@bp.post("/alerts/<cap_id>/preview")
+@admin
+def preview_transmit(cap_id):
+ alert=current_app.extensions["db"].get(cap_id)
+ if not alert or alert["status"]!="pending": return jsonify(error="alert is no longer actionable"),409
+ try:
+  message=final_alert_message(alert,request.form.get("comment",""));return jsonify(message=message,bytes=len(message.encode("utf-8")),cap=message_limit(current_app.config))
+ except MessageError as exc:return jsonify(error=str(exc)),400
 @bp.post("/alerts/<cap_id>/send")
 @admin
 def transmit(cap_id):
  db=current_app.extensions["db"];actor=session["user"];_,dev,status=device_state(db);channel=saved_channel(db)
+ if request.form.get("confirm")!="yes": flash("No transmission: explicit confirmation is required.");return redirect(url_for("console.index"))
  try: verify_channel(dev,channel)
  except RadioError as exc: flash(f"No transmission: {status}. {exc}");return redirect(url_for("console.index"))
  if not db.claim(cap_id,actor): flash("Alert is no longer actionable.");return redirect(url_for("console.index"))
- alert=db.get(cap_id);message=append_comment(alert["message"],request.form.get("comment",""),current_app.config.get("max_message_bytes",180))
+ alert=db.get(cap_id)
+ try: message=final_alert_message(alert,request.form.get("comment",""))
+ except MessageError as exc: db.finish(cap_id,"failed",actor,str(exc));flash(f"No transmission: {exc}");return redirect(url_for("console.index"))
  try:
   detail=send(current_app.config,dev,channel,message);db.finish(cap_id,"sent",actor,detail,message);flash("Dispatch recorded. Radio acceptance is not proof of mesh delivery.")
  except RadioError as exc: db.finish(cap_id,"failed",actor,str(exc),message);flash(f"No transmission: {exc}")
