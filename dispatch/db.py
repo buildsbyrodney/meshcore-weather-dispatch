@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS test_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, 
 CREATE TABLE IF NOT EXISTS county_catalog (ugc TEXT PRIMARY KEY, state TEXT NOT NULL, name TEXT NOT NULL, same TEXT NOT NULL UNIQUE);
 CREATE TABLE IF NOT EXISTS coverage_counties (ugc TEXT PRIMARY KEY, state TEXT NOT NULL, name TEXT NOT NULL, same TEXT NOT NULL UNIQUE, selected_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS catalog_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS dispatch_previews (jti TEXT PRIMARY KEY, consumed_at TEXT NOT NULL);
 '''
 
 def now() -> str: return datetime.now(timezone.utc).isoformat()
@@ -60,6 +61,15 @@ class Database:
             c.execute("BEGIN IMMEDIATE")
             r = c.execute("UPDATE alerts SET status='sending', claimed_by=?, claimed_at=?, updated_at=? WHERE cap_id=? AND status='pending' AND (expires IS NULL OR expires > ?)", (actor, now(), now(), cap_id, now()))
             if r.rowcount != 1:
+                c.execute("ROLLBACK"); return False
+            c.execute("COMMIT"); return True
+    def consume_preview(self, jti: str) -> bool:
+        """Atomically consume a server-issued confirmation preview exactly once."""
+        with self.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            try:
+                c.execute("INSERT INTO dispatch_previews(jti,consumed_at) VALUES(?,?)", (jti, now()))
+            except sqlite3.IntegrityError:
                 c.execute("ROLLBACK"); return False
             c.execute("COMMIT"); return True
     def finish(self, cap_id, status, actor, detail=None, message=None):

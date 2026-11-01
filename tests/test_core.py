@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from dispatch import create_app
 from dispatch.messages import append_comment, truncate_utf8
+from dispatch.messages import radio_message
 from dispatch.devices import resolve_device
 from dispatch.poller import ingest, fetch, eligible, cap_reference_ids
 from dispatch.poller import coverage_counties
@@ -16,12 +17,25 @@ from dispatch.timefmt import local_time
 def config(tmp_path):
  return {"TESTING":True,"secret_key":"test","database":str(tmp_path/"test.sqlite"),"admin_username":"admin","admin_password_hash":"scrypt:32768:8:1$X$C8YciwLCAazhj6PeXTvoUHl0LTB7qm4JzB47lqYsOiwD9sEzKJzQx9QHdT1yTQ","nws_user_agent":"tests@example.invalid","states":["AL"],"alert_types":["Tornado Warning"],"counties":[{"name":"Madison County, AL","same":"001089","ugc":"ALC089"}],"max_message_bytes":80,"dry_run":True,"transmit_enabled":False,"poll_seconds":60,"start_poller":False}
 
+def csrf_token(client, page="/"):
+ return client.get(page).data.decode().split('name="csrf_token" value="')[1].split('"')[0]
+
+def alert_preview(client, cap_id, token, comment=""):
+ return client.post(f"/alerts/{cap_id}/preview",data={"csrf_token":token,"comment":comment})
+
 def feature(alert_id="new", refs="", kind="Alert", description="Shelter now", expires="2099-01-01T00:00:00+00:00"):
  return {"properties":{"id":alert_id,"event":"Tornado Warning","areaDesc":"Madison","headline":"Tornado warning","sent":"2026-01-01T00:00:00+00:00","expires":expires,"description":description,"messageType":kind,"references":refs,"geocode":{"SAME":["001089"],"UGC":["ALC089"]}}}
 
 def test_utf8_cap_and_marked_comment():
- text=append_comment("A", "é"*100, 20); assert len(text.encode())<=20 and "[OPERATOR:" in text
+ try: append_comment("A", "é"*100, 20)
+ except Exception: pass
+ else: assert False
  assert len(truncate_utf8("é"*20,10).encode())<=10
+
+def test_radio_message_uses_local_timezone_and_keeps_essential_area():
+ f=feature();f["properties"]["expires"]="2026-07-01T18:00:00+00:00";f["properties"]["areaDesc"]="Madison County, AL"
+ text=radio_message(f,"America/Chicago")
+ assert "Madison County, AL" in text and "CDT" in text and "UTC" not in text
 
 def test_pending_revision_supersedes_and_is_actionable(tmp_path):
  app=create_app(config(tmp_path)); ingest(app,[feature("old")]); ingest(app,[feature("new","sender,old,when",description="Take shelter now")])
@@ -85,7 +99,7 @@ def test_test_alert_single_county_uses_configured_identifiers(tmp_path):
  props=feature["properties"]
  assert props["test_only"] and props["geocode"]=={"SAME":["001089"],"UGC":["ALC089"]}
  app=create_app(cfg);ingest(app,[feature]);alert=app.extensions["db"].get(props["id"])
- assert alert["test_only"]==1 and alert["status"]=="pending" and alert["message"].startswith("TEST ONLY NWS")
+ assert alert["test_only"]==1 and alert["status"]=="pending" and alert["message"].startswith("TEST ONLY")
 
 def test_test_alert_multi_county_cross_state_is_one_alert(tmp_path):
  cfg=config(tmp_path);cfg["states"]=["AL","TN"];cfg["counties"]=[{"name":"Madison County, AL","same":"001089","ugc":"ALC089"},{"name":"Lincoln County, TN","same":"047103","ugc":"TNC103"}]
@@ -110,7 +124,7 @@ def test_test_alert_maximum_length_keeps_test_marker_and_all_counties(tmp_path):
  cfg=config(tmp_path);cfg["max_message_bytes"]=80;cfg["counties"]= [{"name":f"Very Long County Name {n}","same":f"01{n:04d}"} for n in range(20)]
  feature=build_test_alert(cfg,[x["id"] for x in coverage_counties(cfg)],"Tornado Warning")
  app=create_app(cfg);ingest(app,[feature]);alert=app.extensions["db"].get(feature["properties"]["id"])
- assert len(alert["message"].encode("utf-8"))<=80 and alert["message"].startswith("TEST ONLY NWS")
+ assert len(alert["message"].encode("utf-8"))>80 and alert["message"].startswith("TEST ONLY")
  assert len(feature["properties"]["geocode"]["SAME"])==20
 
 def test_test_alert_revisions_and_cancel_do_not_alter_genuine_family(tmp_path):
@@ -144,19 +158,87 @@ def test_test_alert_creation_never_uses_radio_and_manual_comment_stays_capped(tm
  monkeypatch.setattr("dispatch.routes.send",lambda config,device,channel,message: captured.append(message) or "dry-run")
  db.save_setting("tx_channel",'{"index":1,"name":"#bench"}')
  page=client.get("/").data.decode();token=page.split('name="csrf_token" value="')[1].split('"')[0]
- client.post(f"/alerts/{alert['cap_id']}/send",data={"csrf_token":token,"comment":"é"*100})
- assert len(captured)==1 and len(captured[0].encode("utf-8"))<=120 and captured[0].startswith("TEST ONLY")
- assert "TEST ONLY" in db.history()[0]["detail"]
+ client.post(f"/alerts/{alert['cap_id']}/send",data={"csrf_token":token,"comment":"é"*100,"confirm":"yes"})
+ assert not captured and db.get(alert["cap_id"])["status"]=="pending"
 
 def test_dry_run_send_is_audited(tmp_path,monkeypatch):
- app=create_app(config(tmp_path)); ingest(app,[feature()]); client=app.test_client()
+ cfg=config(tmp_path);cfg["max_message_bytes"]=180;app=create_app(cfg); ingest(app,[feature()]); client=app.test_client()
  with client.session_transaction() as s: s["user"]="admin"
  app.extensions["db"].save_setting("tx_channel",'{"index": 2, "name": "#wx-test"}')
- token=client.get("/").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
+ token=csrf_token(client)
  monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({}, {"device":"/dev/ttyACM0"}, "Connected"))
  monkeypatch.setattr("dispatch.routes.verify_channel",lambda dev, channel: channel)
- assert client.post("/alerts/new/send",data={"csrf_token":token,"comment":"Test"}).status_code==302
+ preview=alert_preview(client,"new",token,"Test").get_json()
+ assert client.post("/alerts/new/send",data={"csrf_token":token,"comment":"Test","confirm":"yes","preview_token":preview["token"]}).status_code==302
  assert app.extensions["db"].get("new")["status"]=="sent"
+
+def test_send_preview_is_authoritative_and_one_time(tmp_path,monkeypatch):
+ cfg=config(tmp_path);cfg["max_message_bytes"]=180;app=create_app(cfg);ingest(app,[feature()]);db=app.extensions["db"];client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ db.save_setting("tx_channel",'{"index": 2, "name": "#wx-test"}')
+ monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/fake"},"Connected"))
+ monkeypatch.setattr("dispatch.routes.verify_channel",lambda *a:None)
+ sent=[];monkeypatch.setattr("dispatch.routes.send",lambda *a:sent.append(a[-1]) or "dry-run")
+ token=csrf_token(client);preview=alert_preview(client,"new",token,"Observe").get_json()
+ assert preview["message"].endswith("[OPERATOR: Observe]") and preview["bytes"]==len(preview["message"].encode())
+ data={"csrf_token":token,"comment":"Observe","confirm":"yes","preview_token":preview["token"]}
+ client.post("/alerts/new/send",data=data)
+ client.post("/alerts/new/send",data=data)
+ assert sent==[preview["message"]] and db.get("new")["status"]=="sent"
+
+def test_send_rejects_changed_comment_channel_or_expired_alert(tmp_path,monkeypatch):
+ cfg=config(tmp_path);cfg["max_message_bytes"]=180;app=create_app(cfg);ingest(app,[feature()]);db=app.extensions["db"];client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ db.save_setting("tx_channel",'{"index": 2, "name": "#wx-test"}')
+ monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/fake"},"Connected"))
+ monkeypatch.setattr("dispatch.routes.verify_channel",lambda *a:None)
+ sent=[];monkeypatch.setattr("dispatch.routes.send",lambda *a:sent.append(a[-1]) or "dry-run")
+ token=csrf_token(client);preview=alert_preview(client,"new",token,"Reviewed").get_json()
+ client.post("/alerts/new/send",data={"csrf_token":token,"comment":"Altered","confirm":"yes","preview_token":preview["token"]})
+ assert not sent and db.get("new")["status"]=="pending"
+ preview=alert_preview(client,"new",token,"Reviewed").get_json();db.save_setting("tx_channel",'{"index": 3, "name": "#other"}')
+ client.post("/alerts/new/send",data={"csrf_token":token,"comment":"Reviewed","confirm":"yes","preview_token":preview["token"]})
+ assert not sent
+ db.save_setting("tx_channel",'{"index": 2, "name": "#wx-test"}');preview=alert_preview(client,"new",token,"Reviewed").get_json()
+ with db.connect() as c:c.execute("UPDATE alerts SET expires='2000-01-01T00:00:00+00:00' WHERE cap_id='new'")
+ client.post("/alerts/new/send",data={"csrf_token":token,"comment":"Reviewed","confirm":"yes","preview_token":preview["token"]})
+ assert not sent and db.get("new")["status"]=="pending"
+
+def test_preview_rejects_an_alert_that_expired_between_polls(tmp_path):
+ cfg=config(tmp_path);cfg["max_message_bytes"]=180;app=create_app(cfg);ingest(app,[feature()]);db=app.extensions["db"];client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ db.save_setting("tx_channel",'{"index": 2, "name": "#wx-test"}')
+ with db.connect() as c:c.execute("UPDATE alerts SET expires='2000-01-01T00:00:00+00:00' WHERE cap_id='new'")
+ assert alert_preview(client,"new",csrf_token(client)).status_code==409
+
+def test_simulated_preview_is_labeled_and_oversize_warning_is_blocked(tmp_path):
+ cfg=config(tmp_path);cfg["max_message_bytes"]=40;cfg["counties"]=[{"name":"Madison County, AL","same":"001089","ugc":"ALC089"}]
+ app=create_app(cfg);client=app.test_client();db=app.extensions["db"]
+ with client.session_transaction() as s:s["user"]="admin"
+ test_feature=build_test_alert(cfg,[coverage_counties(cfg)[0]["id"]],"Tornado Warning");ingest(app,[test_feature]);db.save_setting("tx_channel",'{"index": 1, "name": "#bench"}')
+ response=alert_preview(client,test_feature["properties"]["id"],csrf_token(client))
+ assert response.status_code==400 and "essential warning details" in response.get_json()["error"]
+ assert db.get(test_feature["properties"]["id"])["status"]=="pending"
+
+def test_compact_dashboard_includes_accessible_send_modal(tmp_path):
+ cfg=config(tmp_path);cfg["max_message_bytes"]=180;app=create_app(cfg);ingest(app,[feature()]);client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ page=client.get("/").data.decode()
+ assert 'id="send-dialog"' in page and 'aria-labelledby="send-dialog-title"' in page and "Confirm Send" in page
+ assert 'type="button" class="send open-send"' in page and 'id="ignore-dialog"' in page and "open-ignore" in page
+ assert "confirm('Ignore this warning?')" not in page
+
+def test_ignore_requires_one_time_server_confirmation(tmp_path):
+ app=create_app(config(tmp_path));ingest(app,[feature()]);db=app.extensions["db"];client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ token=csrf_token(client)
+ client.post("/alerts/new/ignore",data={"csrf_token":token,"confirm":"yes"})
+ assert db.get("new")["status"]=="pending"
+ preview=client.post("/alerts/new/ignore-preview",data={"csrf_token":token}).get_json()
+ data={"csrf_token":token,"confirm":"yes","ignore_token":preview["token"]}
+ client.post("/alerts/new/ignore",data=data)
+ client.post("/alerts/new/ignore",data=data)
+ assert db.get("new")["status"]=="ignored"
 
 def test_repeated_nws_polling_is_idempotent_and_healthy(tmp_path,monkeypatch):
  app=create_app(config(tmp_path)); calls=[]
