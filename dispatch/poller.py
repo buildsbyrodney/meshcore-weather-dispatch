@@ -65,7 +65,9 @@ def ingest(app, features):
                 if same:
                     status="unchanged"; label="Unchanged revision"
                 else:
-                    prior_statuses={r["status"] for r in prior_rows}
+                    # References sometimes point only at the immediately prior CAP
+                    # revision. Preserve the operator context from the full family.
+                    prior_statuses={r["status"] for r in c.execute("SELECT status FROM alerts WHERE family_id=?",(family_id,)).fetchall()}
                     for row in c.execute("SELECT cap_id FROM alerts WHERE family_id=? AND status IN ('pending','sending')",(family_id,)).fetchall(): mark(c,row["cap_id"],"superseded",cap_id)
                     status="pending"
                     label="Updated Warning — Previously Sent" if "sent" in prior_statuses else ("Updated Warning — Previously Ignored" if "ignored" in prior_statuses else ("Updated Warning" if prior_rows else "New Warning"))

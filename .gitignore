@@ -12,3 +12,5 @@ work/
 config.yml
 environment
 *.log
+build/
+*.egg-info/

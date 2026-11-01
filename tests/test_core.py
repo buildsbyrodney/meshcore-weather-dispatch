@@ -5,7 +5,7 @@ from dispatch.devices import resolve_device
 from dispatch.poller import ingest, fetch, eligible, cap_reference_ids
 
 def config(tmp_path):
- return {"TESTING":True,"secret_key":"test","database":str(tmp_path/"test.sqlite"),"admin_username":"admin","admin_password_hash":"scrypt:32768:8:1$X$C8YciwLCAazhj6PeXTvoUHl0LTB7qm4JzB47lqYsOiwD9sEzKJzQx9QHdT1yTQ","nws_user_agent":"tests@example.invalid","alert_types":["Tornado Warning"],"counties":[],"max_message_bytes":80,"channels":["#wx-test"],"dry_run":True,"transmit_enabled":False,"poll_seconds":60,"start_poller":False}
+ return {"TESTING":True,"secret_key":"test","database":str(tmp_path/"test.sqlite"),"admin_username":"admin","admin_password_hash":"scrypt:32768:8:1$X$C8YciwLCAazhj6PeXTvoUHl0LTB7qm4JzB47lqYsOiwD9sEzKJzQx9QHdT1yTQ","nws_user_agent":"tests@example.invalid","states":["AL"],"alert_types":["Tornado Warning"],"counties":[],"max_message_bytes":80,"channels":["#wx-test"],"dry_run":True,"transmit_enabled":False,"poll_seconds":60,"start_poller":False}
 
 def feature(alert_id="new", refs="", kind="Alert", description="Shelter now", expires="2099-01-01T00:00:00+00:00"):
  return {"properties":{"id":alert_id,"event":"Tornado Warning","areaDesc":"Madison","headline":"Tornado warning","sent":"2026-01-01T00:00:00+00:00","expires":expires,"description":description,"messageType":kind,"references":refs}}
@@ -31,6 +31,13 @@ def test_ignored_revision_is_labeled_manual_update(tmp_path):
  app=create_app(config(tmp_path)); ingest(app,[feature("old")]); db=app.extensions["db"]; db.finish("old","ignored","operator")
  ingest(app,[feature("new","sender,old,when",description="Changed instruction")])
  assert db.get("old")["status"]=="ignored" and db.get("new")["revision_label"]=="Updated Warning — Previously Ignored"
+
+def test_later_revision_retains_previously_sent_context(tmp_path):
+ app=create_app(config(tmp_path)); ingest(app,[feature("sent")]); db=app.extensions["db"]; db.finish("sent","sent","operator")
+ ingest(app,[feature("middle","sender,sent,when",description="First update")])
+ ingest(app,[feature("latest","sender,middle,when",description="Second update")])
+ assert db.get("middle")["status"]=="superseded"
+ assert db.get("latest")["revision_label"]=="Updated Warning — Previously Sent"
 
 def test_unchanged_revision_does_not_create_duplicate_action(tmp_path):
  app=create_app(config(tmp_path)); ingest(app,[feature("old")]); ingest(app,[feature("new","sender,old,when")])
@@ -88,3 +95,11 @@ def test_api_returns_fragments_for_live_update_and_hardened_session(tmp_path):
  response=client.get("/api/state"); payload=response.get_json()
  assert "alerts_html" in payload and "history_html" in payload and "alert" in payload["alerts_html"]
  assert app.config["SESSION_COOKIE_HTTPONLY"] and app.config["SESSION_COOKIE_SAMESITE"]=="Lax"
+ assert response.headers["X-Content-Type-Options"]=="nosniff" and response.headers["X-Frame-Options"]=="SAMEORIGIN"
+
+def test_rejects_unsafe_configuration(tmp_path):
+ from dispatch import validate_config
+ invalid=config(tmp_path); invalid["states"]=[]
+ try: validate_config(invalid)
+ except ValueError as error: assert "state" in str(error)
+ else: assert False, "empty state list must fail closed"
