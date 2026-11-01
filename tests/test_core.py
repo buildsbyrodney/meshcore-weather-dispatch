@@ -172,6 +172,7 @@ def test_channel_delete_protects_tx_and_confirms(tmp_path,monkeypatch):
  app=create_app(config(tmp_path));db=app.extensions["db"];db.save_setting("tx_channel",'{"index":2,"name":"#wx"}');client=app.test_client()
  with client.session_transaction() as s:s["user"]="admin"
  monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/x","stable_path":"/dev/by-id/x"},"Connected"))
+ monkeypatch.setattr("dispatch.routes.discover_channels",lambda dev:{"capacity":4,"slots":[]})
  token=client.get("/settings").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
  called=[];monkeypatch.setattr("dispatch.routes.delete_channel",lambda *a:called.append(a))
  client.post("/settings/channels/delete",data={"csrf_token":token,"slot":"2","name":"#wx","confirm":"yes"})
