@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, requests
+import json, os, requests
 from uuid import uuid4
 from datetime import datetime, timezone
 from functools import wraps
@@ -126,7 +126,7 @@ def settings():
   except RadioError as exc: channel_error=str(exc)
   try: radio_name=read_device_name(dev);db.save_setting("device_name",radio_name)
   except RadioError as exc: name_error=str(exc)
- return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,radio_name=radio_name,cached_radio_name=cached_radio_name,name_error=name_error,timezones=valid_timezones(),timezone=app_timezone(db))
+ return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,tx_enabled=bool(current_app.config.get("transmit_enabled") and os.environ.get("MESHCORE_SEND_ENABLED")=="1"),channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,radio_name=radio_name,cached_radio_name=cached_radio_name,name_error=name_error,timezones=valid_timezones(),timezone=app_timezone(db))
 @bp.route("/settings/coverage-counties",methods=["GET","POST"])
 @admin
 def coverage_counties_page():
@@ -221,7 +221,7 @@ def test_messaging():
    try:
     verify_channel(dev,channel);detail=send(current_app.config,dev,channel,message);outcome="simulated" if current_app.config.get("dry_run") else "accepted";db.test_message(session["user"],channel,message,outcome,detail);flash(f"Test result: {outcome}. {detail}")
    except RadioError as exc: db.test_message(session["user"],channel or {"name":"none","index":-1},message,"failed",str(exc));flash(f"Test message failed: {status}. {exc}")
- return render_template("test_messaging.html",channel=channel,device_name=db.setting("device_name") or "unknown",status=status,cap=message_limit(current_app.config),history=db.test_history(),enabled=bool(channel and dev and current_app.config.get("transmit_enabled") and __import__('os').environ.get("MESHCORE_SEND_ENABLED")=="1"))
+ return render_template("test_messaging.html",channel=channel,device_name=db.setting("device_name") or "unknown",status=status,cap=message_limit(current_app.config),history=db.test_history(),enabled=bool(channel and dev and current_app.config.get("transmit_enabled") and os.environ.get("MESHCORE_SEND_ENABLED")=="1"))
 @bp.route("/test-alerts",methods=["GET","POST"])
 @admin
 def test_alerts():

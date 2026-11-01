@@ -12,7 +12,7 @@ from dispatch.test_alerts import build_test_alert
 from dispatch.coverage import normalize_catalog
 import dispatch.meshcore_adapter as adapter
 from dispatch.meshcore_adapter import RadioError, verify_channel, hashtag_secret, validate_hashtag, set_device_name
-from dispatch.timefmt import local_time
+from dispatch.timefmt import local_time, compact_local_time
 
 def config(tmp_path):
  return {"TESTING":True,"secret_key":"test","database":str(tmp_path/"test.sqlite"),"admin_username":"admin","admin_password_hash":"scrypt:32768:8:1$X$C8YciwLCAazhj6PeXTvoUHl0LTB7qm4JzB47lqYsOiwD9sEzKJzQx9QHdT1yTQ","nws_user_agent":"tests@example.invalid","states":["AL"],"alert_types":["Tornado Warning"],"counties":[{"name":"Madison County, AL","same":"001089","ugc":"ALC089"}],"max_message_bytes":80,"dry_run":True,"transmit_enabled":False,"poll_seconds":60,"start_poller":False}
@@ -228,6 +228,19 @@ def test_compact_dashboard_includes_accessible_send_modal(tmp_path):
  assert 'type="button" class="send open-send"' in page and 'id="ignore-dialog"' in page and "open-ignore" in page
  assert "confirm('Ignore this warning?')" not in page
 
+def test_connection_state_is_compact_and_interlock_feedback_remains_visible(tmp_path,monkeypatch):
+ app=create_app(config(tmp_path));client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/x"},"Connected by stable path"))
+ monkeypatch.setattr("dispatch.routes.discover_channels",lambda dev:{"capacity":1,"slots":[]})
+ monkeypatch.setattr("dispatch.routes.read_device_name",lambda dev:"WXALERT")
+ settings=client.get("/settings").data.decode()
+ messaging=client.get("/test-messaging").data.decode()
+ assert 'class="status-line"' in settings and "Connected by stable path" in settings and "TX Disabled" in settings
+ assert "Transmission interlocks are disabled or configuration is incomplete." not in messaging
+ assert 'class="status-line"' in messaging and "TX Disabled" in messaging
+ assert "Manual dispatch only. A Companion accepting" not in client.get("/").data.decode()
+
 def test_ignore_requires_one_time_server_confirmation(tmp_path):
  app=create_app(config(tmp_path));ingest(app,[feature()]);db=app.extensions["db"];client=app.test_client()
  with client.session_transaction() as s:s["user"]="admin"
@@ -293,6 +306,25 @@ def test_channel_discovery_and_connection_errors_are_safe(tmp_path,monkeypatch):
 
 def test_local_time_has_zone_abbreviation():
  assert local_time("2026-01-01T18:30:00+00:00","America/Chicago").endswith("CST")
+ assert compact_local_time("2026-01-01T18:30:00+00:00","America/Chicago").endswith("CST")
+
+def test_compact_alert_row_shows_event_once_and_keeps_comment_in_modal(tmp_path):
+ cfg=config(tmp_path);cfg["max_message_bytes"]=180;cfg["timezone"]="America/Chicago";app=create_app(cfg);ingest(app,[feature()]);client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ row=client.get("/api/state").get_json()["alerts_html"]
+ collapsed=row.split("<details>",1)[0]
+ assert 'class="alert compact-alert"' in row and "Tornado Warning" in collapsed and "New Warning" in collapsed
+ assert "Expires Dec 31, 6:00 PM CST" in collapsed and '<label>Comment' not in row and 'name="comment"' in row
+ page=client.get("/").data.decode()
+ assert '<label for="send-comment">Operator comment</label>' in page and 'dialog.open||ignoreDialog.open||document.querySelector(\'#alerts details[open]\')' in page
+
+def test_synthetic_alert_has_one_collapsed_test_only_badge(tmp_path):
+ cfg=config(tmp_path);cfg["counties"]=[{"name":"Madison County, AL","same":"001089","ugc":"ALC089"}]
+ app=create_app(cfg);client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ synthetic=build_test_alert(cfg,[coverage_counties(cfg)[0]["id"]],"Tornado Warning");ingest(app,[synthetic])
+ row=client.get("/api/state").get_json()["alerts_html"].split("<details>",1)[0]
+ assert row.count("TEST ONLY")==1 and "Tornado Warning" in row
 
 def test_hashtag_validation_and_official_derivation():
  assert hashtag_secret("#test").hex()=="9cd8fcf22a47333b591d96a2b848b73f"
