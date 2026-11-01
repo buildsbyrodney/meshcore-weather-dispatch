@@ -6,8 +6,8 @@ from flask import Blueprint, current_app, flash, redirect, render_template, requ
 from werkzeug.security import check_password_hash
 from .devices import scan_devices, resolve_device
 from .messages import append_comment
-from .meshcore_adapter import send, verify_connection, verify_channel, list_channels, RadioError
-from .timefmt import local_time
+from .meshcore_adapter import send, verify_connection, verify_channel, list_channels, discover_channels, add_hashtag_channel, RadioError
+from .timefmt import local_time, valid_timezones, system_timezone
 
 bp=Blueprint("console",__name__)
 def admin(fn):
@@ -17,6 +17,7 @@ def admin(fn):
   return fn(*a,**kw)
  return wrapped
 def saved_channel(db): return json.loads(db.setting("tx_channel") or "null")
+def app_timezone(db): return db.setting("timezone") or current_app.config.get("timezone") or system_timezone()
 def device_state(db):
  saved=json.loads(db.setting("device") or "null"); dev,status=resolve_device(saved,scan_devices()); return saved,dev,status
 def feed_state(db):
@@ -45,7 +46,7 @@ def index():
 @admin
 def state():
  db=current_app.extensions["db"];alerts=db.actionable();history=db.history();last,error,health=feed_state(db)
- return jsonify(alerts_html=render_template("_alerts.html",alerts=alerts,cap=current_app.config.get("max_message_bytes",180),tx_channel=saved_channel(db)),history_html=render_template("_history.html",history=history),nws_last_success=last,nws_last_success_display=local_time(last,current_app.config.get("timezone","UTC")),nws_last_error=error,feed_health=health)
+ return jsonify(alerts_html=render_template("_alerts.html",alerts=alerts,cap=current_app.config.get("max_message_bytes",180),tx_channel=saved_channel(db)),history_html=render_template("_history.html",history=history),nws_last_success=last,nws_last_success_display=local_time(last,app_timezone(db)),nws_last_error=error,feed_health=health)
 @bp.post("/alerts/<cap_id>/ignore")
 @admin
 def ignore(cap_id):
@@ -72,16 +73,31 @@ def settings():
  if request.method=="POST":
   value=request.form.get("device");db.save_setting("device",value or "null");db.save_setting("tx_channel","null")
   flash("Device selection saved. Transmit channel cleared and must be selected for this device.");return redirect(url_for("console.settings"))
- saved,dev,status=device_state(db);channels=[];channel_error=None
+ saved,dev,status=device_state(db);channels=[];channel_error=None;discovery=None
  if dev:
-  try: channels=list_channels(dev)
+  try: discovery=discover_channels(dev);channels=[{"index":x["index"],"name":x["name"]} for x in discovery["slots"] if x["name"]]
   except RadioError as exc: channel_error=str(exc)
- return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,channels=channels,tx_channel=saved_channel(db),channel_error=channel_error)
+ return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,timezones=valid_timezones(),timezone=app_timezone(db))
 @bp.get("/api/devices")
 @admin
 def devices_api():
  db=current_app.extensions["db"];saved=json.loads(db.setting("device") or "null")
  return jsonify(options_html=render_template("_device_options.html",devices=scan_devices(),saved=saved))
+@bp.post("/settings/discover")
+@admin
+def discover_unsaved():
+ try:
+  requested=json.loads(request.form.get("device",""));device=next((d for d in scan_devices() if d["device"]==requested.get("device") and d.get("serial_number")==requested.get("serial_number")),None)
+  if not device: raise RadioError("select a currently detected USB device")
+  return jsonify(discovery=discover_channels(device),error=None)
+ except (ValueError,TypeError,RadioError) as exc: return jsonify(discovery=None,error=str(exc)),400
+@bp.post("/settings/timezone")
+@admin
+def select_timezone():
+ db=current_app.extensions["db"];name=request.form.get("timezone","")
+ if name not in valid_timezones(): flash("Time zone was not saved: invalid IANA time zone.")
+ else: db.save_setting("timezone",name);flash(f"Time zone saved: {name}.")
+ return redirect(url_for("console.settings"))
 @bp.post("/settings/channel")
 @admin
 def select_channel():
@@ -91,6 +107,18 @@ def select_channel():
   if not selected: raise RadioError("selected channel is unavailable; rescan the connected Companion")
   db.save_setting("tx_channel",json.dumps(selected));db.audit(None,"tx_channel_selected",session["user"],f"{selected['name']} (slot {selected['index']})");flash(f"Transmit channel saved: {selected['name']}.")
  except (ValueError,RadioError) as exc: flash(f"Channel not saved: {status}. {exc}")
+ return redirect(url_for("console.settings"))
+@bp.post("/settings/channels/add")
+@admin
+def add_channel():
+ db=current_app.extensions["db"];_,dev,status=device_state(db)
+ try:
+  if request.form.get("confirm") != "yes": raise RadioError("explicit confirmation is required")
+  created=add_hashtag_channel(dev,int(request.form.get("slot","-1")),request.form.get("name",""))
+  db.audit(None,"channel_added",session["user"],f"{created['name']} (slot {created['index']})")
+  # Existing saved TX choice must be rechecked after any configuration change.
+  db.save_setting("tx_channel","null");flash(f"Added {created['name']} in slot {created['index']}. Re-select transmit channel before sending.")
+ except (ValueError,RadioError) as exc: flash(f"Channel was not added: {status}. {exc}")
  return redirect(url_for("console.settings"))
 @bp.post("/settings/test")
 @admin

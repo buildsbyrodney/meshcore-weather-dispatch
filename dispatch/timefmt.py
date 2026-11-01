@@ -1,6 +1,15 @@
 from __future__ import annotations
 from datetime import datetime
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, available_timezones
+from pathlib import Path
+
+def system_timezone() -> str:
+    try:
+        candidate=Path("/etc/timezone").read_text().strip()
+        ZoneInfo(candidate); return candidate
+    except Exception: return "UTC"
+
+def valid_timezones() -> list[str]: return sorted(available_timezones())
 
 def local_time(value, timezone_name: str) -> str:
     if not value: return "—"

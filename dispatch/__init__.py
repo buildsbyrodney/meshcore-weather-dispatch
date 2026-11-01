@@ -8,7 +8,7 @@ from flask import Flask
 from flask_wtf.csrf import CSRFProtect
 from .db import Database
 from .routes import bp
-from .timefmt import local_time
+from .timefmt import local_time, system_timezone
 
 csrf = CSRFProtect()
 
@@ -40,7 +40,7 @@ def create_app(test_config: dict | None = None) -> Flask:
                       SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
                       SESSION_COOKIE_SECURE=bool(config.get("session_cookie_secure", False)))
     app.extensions["db"] = Database(app.config["database"])
-    app.jinja_env.filters["localtime"] = lambda value: local_time(value, app.config.get("timezone", "UTC"))
+    app.jinja_env.filters["localtime"] = lambda value: local_time(value, app.extensions["db"].setting("timezone") or app.config.get("timezone") or system_timezone())
     app.extensions["db"].initialize()
     csrf.init_app(app)
     app.register_blueprint(bp)

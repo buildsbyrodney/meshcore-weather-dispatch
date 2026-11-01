@@ -3,7 +3,7 @@ from dispatch import create_app
 from dispatch.messages import append_comment, truncate_utf8
 from dispatch.devices import resolve_device
 from dispatch.poller import ingest, fetch, eligible, cap_reference_ids
-from dispatch.meshcore_adapter import RadioError, verify_channel
+from dispatch.meshcore_adapter import RadioError, verify_channel, hashtag_secret, validate_hashtag
 from dispatch.timefmt import local_time
 
 def config(tmp_path):
@@ -112,6 +112,7 @@ def test_channel_selection_persists_name_and_slot(tmp_path,monkeypatch):
  app=create_app(config(tmp_path)); client=app.test_client()
  with client.session_transaction() as s: s["user"]="admin"
  monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({}, {"device":"/dev/ttyACM0"}, "Connected"))
+ monkeypatch.setattr("dispatch.routes.discover_channels",lambda dev:{"capacity":4,"slots":[{"index":2,"name":"#wx-northal","occupied":True,"known":True}]})
  monkeypatch.setattr("dispatch.routes.list_channels",lambda dev:[{"index":2,"name":"#wx-northal"}])
  token=client.get("/settings").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
  assert client.post("/settings/channel",data={"csrf_token":token,"channel_index":"2"}).status_code==302
@@ -127,10 +128,42 @@ def test_channel_discovery_and_connection_errors_are_safe(tmp_path,monkeypatch):
  app=create_app(config(tmp_path)); client=app.test_client()
  with client.session_transaction() as s: s["user"]="admin"
  monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({}, {"device":"/dev/ttyACM0"}, "Connected"))
- monkeypatch.setattr("dispatch.routes.list_channels",lambda dev: (_ for _ in ()).throw(RadioError("serial permission denied")))
+ monkeypatch.setattr("dispatch.routes.discover_channels",lambda dev: (_ for _ in ()).throw(RadioError("serial permission denied")))
  page=client.get("/settings").data.decode(); assert "serial permission denied" in page
  monkeypatch.setattr("dispatch.routes.scan_devices",lambda:[])
  assert "options_html" in client.get("/api/devices").get_json()
 
 def test_local_time_has_zone_abbreviation():
  assert local_time("2026-01-01T18:30:00+00:00","America/Chicago").endswith("CST")
+
+def test_hashtag_validation_and_official_derivation():
+ assert hashtag_secret("#test").hex()=="9cd8fcf22a47333b591d96a2b848b73f"
+ try: validate_hashtag("not-a-hashtag")
+ except RadioError: pass
+ else: assert False
+
+def test_unsaved_device_channel_discovery(tmp_path,monkeypatch):
+ app=create_app(config(tmp_path)); client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ device={"device":"/dev/ttyACM0","serial_number":"x"}
+ monkeypatch.setattr("dispatch.routes.scan_devices",lambda:[device])
+ monkeypatch.setattr("dispatch.routes.discover_channels",lambda d:{"capacity":4,"slots":[{"index":0,"name":"#wx","occupied":True},{"index":1,"name":"","occupied":False}]})
+ token=client.get("/settings").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
+ r=client.post("/settings/discover",data={"csrf_token":token,"device":__import__('json').dumps(device)})
+ assert r.status_code==200 and r.get_json()["discovery"]["capacity"]==4
+
+def test_channel_add_requires_confirmation_and_clears_tx(tmp_path,monkeypatch):
+ app=create_app(config(tmp_path));db=app.extensions["db"];db.save_setting("tx_channel",'{"index":1,"name":"#old"}');client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/x"},"Connected"))
+ monkeypatch.setattr("dispatch.routes.discover_channels",lambda dev:{"capacity":4,"slots":[{"index":2,"name":"","occupied":False,"known":True}]})
+ monkeypatch.setattr("dispatch.routes.add_hashtag_channel",lambda d,s,n:{"index":s,"name":n})
+ token=client.get("/settings").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
+ client.post("/settings/channels/add",data={"csrf_token":token,"slot":"2","name":"#new"})
+ assert db.setting("tx_channel") is not None
+ client.post("/settings/channels/add",data={"csrf_token":token,"slot":"2","name":"#new","confirm":"yes"})
+ assert db.setting("tx_channel")=="null"
+
+def test_timezone_persistence_and_dst(tmp_path):
+ app=create_app(config(tmp_path));db=app.extensions["db"];db.save_setting("timezone","America/Chicago")
+ assert local_time("2026-07-01T18:00:00+00:00",db.setting("timezone")).endswith("CDT")

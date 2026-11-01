@@ -1,6 +1,6 @@
 """Conservative, read-first adapter for the official ``meshcore`` library."""
 from __future__ import annotations
-import asyncio, os
+import asyncio, os, hashlib, re
 
 READ_TIMEOUT = 10
 class RadioError(Exception): pass
@@ -28,7 +28,14 @@ def _channel_name(payload) -> str | None:
     if isinstance(payload, dict): return payload.get("name") or payload.get("channel_name")
     return getattr(payload,"name",None) or getattr(payload,"channel_name",None)
 
-async def _channels_serial(path: str) -> list[dict]:
+def _channel_secret(payload):
+    value=payload.get("secret") if isinstance(payload,dict) else getattr(payload,"secret",None)
+    if isinstance(value,str):
+        try: return bytes.fromhex(value)
+        except ValueError: return None
+    return bytes(value) if isinstance(value,(bytes,bytearray)) else None
+
+async def _slots_serial(path: str) -> dict:
     from meshcore import EventType
     radio=await _open(path)
     try:
@@ -37,13 +44,18 @@ async def _channels_serial(path: str) -> list[dict]:
         payload=info.payload or {}
         count=payload.get("max_channels") if isinstance(payload,dict) else getattr(payload,"max_channels",None)
         if not isinstance(count,int) or not 0 < count <= 256: raise RadioError("Companion did not report a usable channel count")
-        channels=[]
+        slots=[]
         for index in range(count):
             result=await asyncio.wait_for(radio.commands.get_channel(index), READ_TIMEOUT)
-            if result.type == EventType.ERROR: continue
-            name=_channel_name(result.payload)
-            if name: channels.append({"index":index,"name":str(name)})
-        return channels
+            if result.type == EventType.ERROR:
+                slots.append({"index":index,"name":"","occupied":True,"known":False});continue
+            name=str(_channel_name(result.payload) or "")
+            secret=_channel_secret(result.payload)
+            # Unknown secret state is deliberately not considered available.
+            known=secret is not None
+            occupied=bool(name) or not known or any(secret)
+            slots.append({"index":index,"name":name,"occupied":occupied,"known":known})
+        return {"capacity":count,"slots":slots}
     except RadioError: raise
     except asyncio.TimeoutError as exc: raise RadioError("Companion channel query timed out") from exc
     except Exception as exc: raise RadioError(f"Companion channel query failed: {exc}") from exc
@@ -52,7 +64,42 @@ async def _channels_serial(path: str) -> list[dict]:
 def list_channels(device: dict | None) -> list[dict]:
     """Read configured channel slots only; never creates or changes a channel."""
     if not device: raise RadioError("no verified Companion device")
-    return asyncio.run(_channels_serial(device["device"]))
+    return [{"index":slot["index"],"name":slot["name"]} for slot in asyncio.run(_slots_serial(device["device"]))["slots"] if slot["name"]]
+
+def discover_channels(device: dict | None) -> dict:
+    if not device: raise RadioError("no verified Companion device")
+    return asyncio.run(_slots_serial(device["device"]))
+
+def validate_hashtag(name: str) -> str:
+    name=name.strip()
+    if not re.fullmatch(r"#[A-Za-z0-9][A-Za-z0-9_-]{0,31}",name): raise RadioError("channel must be a hashtag with 1–32 letters, digits, _ or - after #")
+    return name
+
+def hashtag_secret(name: str) -> bytes:
+    return hashlib.sha256(validate_hashtag(name).encode("utf-8")).digest()[:16]
+
+async def _write_channel_serial(path: str, slot: int, name: str) -> None:
+    from meshcore import EventType
+    radio=await _open(path)
+    try:
+        existing=await asyncio.wait_for(radio.commands.get_channel(slot),READ_TIMEOUT)
+        if existing.type == EventType.ERROR: raise RadioError("selected slot could not be re-read before writing")
+        existing_name=str(_channel_name(existing.payload) or "")
+        existing_secret=_channel_secret(existing.payload)
+        if existing_name or existing_secret is None or any(existing_secret): raise RadioError("selected slot is no longer confirmed empty")
+        result=await asyncio.wait_for(radio.commands.set_channel(slot,name,hashtag_secret(name)),READ_TIMEOUT)
+        if result.type == EventType.ERROR: raise RadioError(f"Companion rejected channel configuration: {result.payload}")
+    finally: await _close(radio)
+
+def add_hashtag_channel(device: dict | None, slot: int, name: str) -> dict:
+    if not device: raise RadioError("no verified Companion device")
+    name=validate_hashtag(name); before=discover_channels(device)
+    target=next((x for x in before["slots"] if x["index"]==slot),None)
+    if not target or target["occupied"]: raise RadioError("selected slot is not confirmed empty")
+    asyncio.run(_write_channel_serial(device["device"],slot,name))
+    after=discover_channels(device); verified=next((x for x in after["slots"] if x["index"]==slot),None)
+    if not verified or verified["name"] != name: raise RadioError("channel write was not verified by read-back")
+    return {"index":slot,"name":name}
 
 def verify_channel(device: dict | None, selected: dict | None) -> dict:
     if not selected: raise RadioError("no transmit channel selected")
