@@ -40,6 +40,15 @@ jobs:
       - name: Exercise authenticated proxy workflow
         run: |
           base=http://127.0.0.1
+          checked_post() {
+            label=$1; shift
+            status=$(curl -sS -o /tmp/http-body -w '%{http_code}' "$@")
+            echo "$label HTTP $status"
+            if [[ "$status" != 200 && "$status" != 302 ]]; then
+              sed -E 's/(csrf_token|token|password|secret)=[^& <]*/\1=[redacted]/g; s/value="[^"]*"/value="[redacted]"/g' /tmp/http-body | tr '\n' ' ' | cut -c1-500
+              exit 1
+            fi
+          }
           curl -fsS -c /tmp/cookies "$base/login" -o /tmp/login.html
           csrf=$(sed -n 's/.*name="csrf_token" value="\([^"]*\)".*/\1/p' /tmp/login.html | head -1)
           curl -fsS -b /tmp/cookies -c /tmp/cookies -d "csrf_token=$csrf&username=ciadmin&password=ci-password-long-enough" -o /dev/null -D /tmp/login.headers "$base/login"
@@ -55,13 +64,14 @@ jobs:
           PY
           curl -fsS -b /tmp/cookies "$base/test-alerts" -o /tmp/test-alerts.html
           csrf=$(sed -n 's/.*name="csrf_token" value="\([^"]*\)".*/\1/p' /tmp/test-alerts.html | head -1)
-          curl -fsS -b /tmp/cookies -d "csrf_token=$csrf&county=same%3A001089%7Cugc%3AALC089&event=Tornado+Warning" -o /dev/null "$base/test-alerts"
+          checked_post 'Test Alerts' -b /tmp/cookies --data-urlencode "csrf_token=$csrf" --data-urlencode 'county=same:001089|ugc:ALC089' --data-urlencode 'event=Tornado Warning' "$base/test-alerts"
           cap=$(sudo -u weatherdispatch /opt/meshcore-weather-dispatch/.venv/bin/python - <<'PY'
           from dispatch.db import Database
           print(Database('/var/lib/meshcore-weather-dispatch/dispatch.sqlite3').actionable()[0]['cap_id'])
           PY
           )
-          curl -fsS -b /tmp/cookies -d "csrf_token=$csrf&comment=" "$base/alerts/$cap/preview" | grep -q 'message'
+          checked_post 'Dispatch preview' -b /tmp/cookies --data-urlencode "csrf_token=$csrf" --data-urlencode 'comment=' "$base/alerts/$cap/preview"
+          grep -q 'message' /tmp/http-body
       - name: Upgrade preserves durable state
         env:
           UPDATE_BRANCH: integration
