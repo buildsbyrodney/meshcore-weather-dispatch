@@ -23,8 +23,8 @@ def build_test_alert(config: dict, selected_ids: list[str], event: str) -> dict:
     return {"type":"Feature","geometry":None,"properties":{
         "id":f"test-alert-{uuid4()}","event":event,"areaDesc":areas,
         "headline":f"TEST ONLY — {event}",
-        "description":"TEST ONLY synthetic warning. Do not treat as an NWS alert.",
-        "instruction":"TEST ONLY: verify operator workflow; no automatic transmission.",
+        "description":"TEST ONLY synthetic warning.",
+        "instruction":"",
         "sent":sent,"effective":sent,"expires":expires,"messageType":"Alert",
         "geocode":{"SAME":same,"UGC":ugc},"test_only":True,
     }}

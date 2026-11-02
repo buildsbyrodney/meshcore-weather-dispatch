@@ -15,7 +15,7 @@ from dispatch.meshcore_adapter import RadioError, verify_channel, hashtag_secret
 from dispatch.timefmt import local_time, compact_local_time
 
 def config(tmp_path):
- return {"TESTING":True,"secret_key":"test","database":str(tmp_path/"test.sqlite"),"admin_username":"admin","admin_password_hash":"scrypt:32768:8:1$X$C8YciwLCAazhj6PeXTvoUHl0LTB7qm4JzB47lqYsOiwD9sEzKJzQx9QHdT1yTQ","nws_user_agent":"tests@example.invalid","states":["AL"],"alert_types":["Tornado Warning"],"counties":[{"name":"Madison County, AL","same":"001089","ugc":"ALC089"}],"max_message_bytes":80,"dry_run":True,"transmit_enabled":False,"poll_seconds":60,"start_poller":False}
+ return {"TESTING":True,"secret_key":"test","database":str(tmp_path/"test.sqlite"),"admin_username":"admin","admin_password_hash":"scrypt:32768:8:1$X$C8YciwLCAazhj6PeXTvoUHl0LTB7qm4JzB47lqYsOiwD9sEzKJzQx9QHdT1yTQ","nws_user_agent":"tests@example.invalid","states":["AL"],"alert_types":["Tornado Warning"],"counties":[{"name":"Madison County, AL","same":"001089","ugc":"ALC089"}],"max_message_bytes":80,"transmit_enabled":False,"poll_seconds":60,"start_poller":False}
 
 def csrf_token(client, page="/"):
  return client.get(page).data.decode().split('name="csrf_token" value="')[1].split('"')[0]
@@ -98,6 +98,7 @@ def test_test_alert_single_county_uses_configured_identifiers(tmp_path):
  choice=coverage_counties(cfg)[0]; feature=build_test_alert(cfg,[choice["id"]],"Tornado Warning")
  props=feature["properties"]
  assert props["test_only"] and props["geocode"]=={"SAME":["001089"],"UGC":["ALC089"]}
+ assert props["instruction"]=="" and radio_message(feature,"America/Chicago").count("TEST ONLY")==1
  app=create_app(cfg);ingest(app,[feature]);alert=app.extensions["db"].get(props["id"])
  assert alert["test_only"]==1 and alert["status"]=="pending" and alert["message"].startswith("TEST ONLY")
 
@@ -155,19 +156,21 @@ def test_test_alert_creation_never_uses_radio_and_manual_comment_stays_capped(tm
  alert=db.actionable()[0];captured=[]
  monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/fake"},"Connected"))
  monkeypatch.setattr("dispatch.routes.verify_channel",lambda *a:None)
- monkeypatch.setattr("dispatch.routes.send",lambda config,device,channel,message: captured.append(message) or "dry-run")
+ monkeypatch.setattr("dispatch.routes.send",lambda config,device,channel,message: captured.append(message) or "accepted")
  db.save_setting("tx_channel",'{"index":1,"name":"#bench"}')
  page=client.get("/").data.decode();token=page.split('name="csrf_token" value="')[1].split('"')[0]
  client.post(f"/alerts/{alert['cap_id']}/send",data={"csrf_token":token,"comment":"é"*100,"confirm":"yes"})
  assert not captured and db.get(alert["cap_id"])["status"]=="pending"
 
-def test_dry_run_send_is_audited(tmp_path,monkeypatch):
+def test_manual_send_is_audited(tmp_path,monkeypatch):
  cfg=config(tmp_path);cfg["max_message_bytes"]=180;app=create_app(cfg); ingest(app,[feature()]); client=app.test_client()
  with client.session_transaction() as s: s["user"]="admin"
  app.extensions["db"].save_setting("tx_channel",'{"index": 2, "name": "#wx-test"}')
+ app.extensions["db"].save_setting("transmit_enabled","true")
  token=csrf_token(client)
  monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({}, {"device":"/dev/ttyACM0"}, "Connected"))
  monkeypatch.setattr("dispatch.routes.verify_channel",lambda dev, channel: channel)
+ monkeypatch.setattr("dispatch.routes.send",lambda *args:"accepted")
  preview=alert_preview(client,"new",token,"Test").get_json()
  assert client.post("/alerts/new/send",data={"csrf_token":token,"comment":"Test","confirm":"yes","preview_token":preview["token"]}).status_code==302
  assert app.extensions["db"].get("new")["status"]=="sent"
@@ -178,7 +181,7 @@ def test_send_preview_is_authoritative_and_one_time(tmp_path,monkeypatch):
  db.save_setting("tx_channel",'{"index": 2, "name": "#wx-test"}')
  monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/fake"},"Connected"))
  monkeypatch.setattr("dispatch.routes.verify_channel",lambda *a:None)
- sent=[];monkeypatch.setattr("dispatch.routes.send",lambda *a:sent.append(a[-1]) or "dry-run")
+ sent=[];monkeypatch.setattr("dispatch.routes.send",lambda *a:sent.append(a[-1]) or "accepted")
  token=csrf_token(client);preview=alert_preview(client,"new",token,"Observe").get_json()
  assert preview["message"].endswith("[OPERATOR: Observe]") and preview["bytes"]==len(preview["message"].encode())
  data={"csrf_token":token,"comment":"Observe","confirm":"yes","preview_token":preview["token"]}
@@ -192,7 +195,7 @@ def test_send_rejects_changed_comment_channel_or_expired_alert(tmp_path,monkeypa
  db.save_setting("tx_channel",'{"index": 2, "name": "#wx-test"}')
  monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/fake"},"Connected"))
  monkeypatch.setattr("dispatch.routes.verify_channel",lambda *a:None)
- sent=[];monkeypatch.setattr("dispatch.routes.send",lambda *a:sent.append(a[-1]) or "dry-run")
+ sent=[];monkeypatch.setattr("dispatch.routes.send",lambda *a:sent.append(a[-1]) or "accepted")
  token=csrf_token(client);preview=alert_preview(client,"new",token,"Reviewed").get_json()
  client.post("/alerts/new/send",data={"csrf_token":token,"comment":"Altered","confirm":"yes","preview_token":preview["token"]})
  assert not sent and db.get("new")["status"]=="pending"
@@ -228,7 +231,7 @@ def test_compact_dashboard_includes_accessible_send_modal(tmp_path):
  assert 'type="button" class="send open-send"' in page and 'id="ignore-dialog"' in page and "open-ignore" in page
  assert "confirm('Ignore this warning?')" not in page
 
-def test_connection_state_is_compact_and_interlock_feedback_remains_visible(tmp_path,monkeypatch):
+def test_connection_state_and_manual_permission_are_compact(tmp_path,monkeypatch):
  app=create_app(config(tmp_path));client=app.test_client()
  with client.session_transaction() as s:s["user"]="admin"
  monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/x"},"Connected by stable path"))
@@ -236,8 +239,8 @@ def test_connection_state_is_compact_and_interlock_feedback_remains_visible(tmp_
  monkeypatch.setattr("dispatch.routes.read_device_name",lambda dev:"WXALERT")
  settings=client.get("/settings").data.decode()
  messaging=client.get("/test-messaging").data.decode()
- assert 'class="status-line"' in settings and "Connected by stable path" in settings and "TX interlocks: block sending" in settings
- assert "Transmission interlocks are disabled or configuration is incomplete." not in messaging
+ assert 'class="status-line"' in settings and "Connected by stable path" in settings and "Manual transmissions disabled" in settings
+ assert "Manual transmission is disabled or configuration is incomplete." not in messaging
  assert 'class="status-line"' in messaging and "TX Disabled" in messaging
  assert "Manual dispatch only. A Companion accepting" not in client.get("/").data.decode()
 
@@ -386,17 +389,17 @@ def test_channel_delete_protects_tx_and_confirms(tmp_path,monkeypatch):
  client.post("/settings/channels/delete",data={"csrf_token":token,"slot":"3","name":"#other","confirm":"yes"})
  assert called and db.history()[0]["action"]=="channel_deleted"
 
-def test_manual_test_message_simulated_and_utf8_limit(tmp_path,monkeypatch):
+def test_manual_test_message_and_utf8_limit(tmp_path,monkeypatch):
  app=create_app(config(tmp_path));db=app.extensions["db"];db.save_setting("tx_channel",'{"index":1,"name":"#bench"}');client=app.test_client()
  with client.session_transaction() as s:s["user"]="admin"
  monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/x"},"Connected"))
  monkeypatch.setattr("dispatch.routes.verify_channel",lambda *a:None)
- monkeypatch.setattr("dispatch.routes.send",lambda *a:"dry-run: no serial connection or RF transmission attempted")
+ monkeypatch.setattr("dispatch.routes.send",lambda *a:"accepted")
  token=client.get("/test-messaging").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
  client.post("/test-messaging",data={"csrf_token":token,"message":"é"*41,"confirm":"yes"})
  assert not db.test_history()
  client.post("/test-messaging",data={"csrf_token":token,"message":"bench","confirm":"yes"})
- assert db.test_history()[0]["outcome"]=="simulated"
+ assert db.test_history()[0]["outcome"]=="accepted"
 
 def test_test_message_channel_failure_is_separate_history(tmp_path,monkeypatch):
  app=create_app(config(tmp_path));db=app.extensions["db"];db.save_setting("tx_channel",'{"index":1,"name":"#bench"}');client=app.test_client()
@@ -629,11 +632,10 @@ def test_transmission_setting_is_audited_and_never_opens_radio(tmp_path,monkeypa
  assert app.extensions["db"].setting("transmit_enabled")=="true"
  assert app.extensions["db"].history()[0]["action"]=="transmission_setting_changed"
 
-def test_route_rechecks_transmission_interlocks_after_signed_preview(tmp_path,monkeypatch):
- cfg=config(tmp_path);cfg["dry_run"]=False;app=create_app(cfg);ingest(app,[feature()]);db=app.extensions["db"];client=app.test_client()
+def test_route_rechecks_manual_permission_after_signed_preview(tmp_path,monkeypatch):
+ cfg=config(tmp_path);app=create_app(cfg);ingest(app,[feature()]);db=app.extensions["db"];client=app.test_client()
  with client.session_transaction() as s:s["user"]="admin"
  db.save_setting("tx_channel",'{"index":1,"name":"#bench"}');db.save_setting("transmit_enabled","true")
- monkeypatch.setenv("MESHCORE_SEND_ENABLED","1")
  monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/fake"},"Connected"));monkeypatch.setattr("dispatch.routes.verify_channel",lambda *args:None)
  opened=[]
  async def opened_send(*args): opened.append(args);return "accepted"
@@ -643,3 +645,19 @@ def test_route_rechecks_transmission_interlocks_after_signed_preview(tmp_path,mo
  client.post("/alerts/new/send",data={"csrf_token":token,"confirm":"yes","comment":"","preview_token":preview["token"]})
  assert not opened and db.get("new")["status"]=="failed"
  assert db.history()[0]["action"]=="failed"
+
+def test_startup_poll_test_alert_and_settings_never_open_radio(tmp_path,monkeypatch):
+ """Only an explicitly confirmed dispatch may reach the serial adapter."""
+ cfg=config(tmp_path);app=create_app(cfg);db=app.extensions["db"];client=app.test_client()
+ monkeypatch.setattr("dispatch.meshcore_adapter._send_serial",lambda *args: (_ for _ in ()).throw(AssertionError("radio opened")))
+ class Response:
+  def raise_for_status(self): pass
+  def json(self): return {"features":[]}
+ monkeypatch.setattr("dispatch.poller.requests.get",lambda *args,**kwargs: Response())
+ fetch(app)
+ with client.session_transaction() as s:s["user"]="admin"
+ client.post("/settings/transmission",data={"csrf_token":csrf_token(client),"transmit_enabled":"yes"})
+ choice=coverage_counties(app.config)[0]
+ token=client.get("/test-alerts").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
+ client.post("/test-alerts",data={"csrf_token":token,"event":"Tornado Warning","county":choice["id"]})
+ assert db.actionable() and db.setting("transmit_enabled")=="true"

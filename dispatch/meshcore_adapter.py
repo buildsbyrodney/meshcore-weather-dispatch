@@ -1,6 +1,6 @@
 """Conservative, read-first adapter for the official ``meshcore`` library."""
 from __future__ import annotations
-import asyncio, os, hashlib, re, threading
+import asyncio, hashlib, re, threading
 
 READ_TIMEOUT = 10
 radio_lock = threading.RLock()
@@ -140,9 +140,8 @@ def verify_channel(device: dict | None, selected: dict | None) -> dict:
     return expected
 
 def send(config: dict, device: dict | None, channel: dict, message: str) -> str:
-    if config.get("dry_run"): return "dry-run: no serial connection or RF transmission attempted"
-    if not config.get("transmit_enabled") or os.environ.get("MESHCORE_SEND_ENABLED") != "1":
-        raise RadioError("transmission is disabled (set config and explicit environment interlock)")
+    if not config.get("transmit_enabled"):
+        raise RadioError("manual transmissions are disabled in Settings")
     if not device: raise RadioError("no verified Companion device")
     with radio_lock: return asyncio.run(_send_serial(device["device"], int(channel["index"]), message))
 
@@ -212,7 +211,6 @@ async def _send_serial(path: str, channel_index: int, message: str) -> str:
 
 def verify_connection(config: dict, device: dict | None) -> str:
     if not device: raise RadioError("no verified Companion device")
-    if config.get("dry_run"): return "dry-run: selection resolved; serial connection intentionally not opened"
     with radio_lock: return asyncio.run(_verify_serial(device["device"]))
 
 async def _verify_serial(path: str) -> str:
