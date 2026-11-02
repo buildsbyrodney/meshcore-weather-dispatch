@@ -1,0 +1,90 @@
+name: deployment integration
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  debian-compatible-deployment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Prepare disposable local deployment remote
+        run: |
+          git config user.email integration@example.invalid
+          git config user.name integration
+          git branch -f integration "$GITHUB_SHA"
+          git clone --bare . /tmp/meshcore-origin.git
+          chmod -R a+rX /tmp/meshcore-origin.git
+          sudo systemctl stop apache2 nginx 2>/dev/null || true
+          if sudo ss -ltnH '( sport = :80 )' | grep -q .; then echo 'port 80 is not disposable on this runner'; exit 1; fi
+      - name: Fresh install through the production installer
+        env:
+          REPO_URL: file:///tmp/meshcore-origin.git
+          APP_BRANCH: integration
+        run: |
+          printf 'ciadmin\nci@example.invalid\nAL\nci-password-long-enough\n' | sudo -E ./scripts/install.sh
+          sudo systemctl is-active --quiet nginx meshcore-weather-dispatch
+          sudo ss -ltn | grep -q '127.0.0.1:8080'
+          ! sudo ss -ltn | grep -qE '0\.0\.0\.0:8080|\[::\]:8080'
+          sudo test -d /opt/meshcore-weather-dispatch/.git
+          sudo -u weatherdispatch git -C /opt/meshcore-weather-dispatch remote get-url origin | grep -q /tmp/meshcore-origin.git
+          sudo grep -q '^MESHCORE_SEND_ENABLED=0$' /etc/meshcore-weather-dispatch/environment
+      - name: Exercise authenticated proxy workflow
+        run: |
+          base=http://127.0.0.1
+          curl -fsS -c /tmp/cookies "$base/login" -o /tmp/login.html
+          csrf=$(sed -n 's/.*name="csrf_token" value="\([^"]*\)".*/\1/p' /tmp/login.html | head -1)
+          curl -fsS -b /tmp/cookies -c /tmp/cookies -d "csrf_token=$csrf&username=ciadmin&password=ci-password-long-enough" -o /dev/null -D /tmp/login.headers "$base/login"
+          grep -qi '^location: /' /tmp/login.headers
+          curl -fsS -b /tmp/cookies "$base/settings" -o /tmp/settings.html
+          grep -q 'NWS Monitoring' /tmp/settings.html
+          sudo -u weatherdispatch /opt/meshcore-weather-dispatch/.venv/bin/python - <<'PY'
+          from dispatch.db import Database
+          db=Database('/var/lib/meshcore-weather-dispatch/dispatch.sqlite3')
+          db.replace_catalog([{'ugc':'ALC089','state':'AL','name':'Madison','same':'001089'}],{'source':'ci'})
+          db.save_coverage(['ALC089'],{'AL'})
+          db.save_setting('tx_channel','{"index":1,"name":"#ci"}')
+          PY
+          curl -fsS -b /tmp/cookies "$base/test-alerts" -o /tmp/test-alerts.html
+          csrf=$(sed -n 's/.*name="csrf_token" value="\([^"]*\)".*/\1/p' /tmp/test-alerts.html | head -1)
+          curl -fsS -b /tmp/cookies -d "csrf_token=$csrf&county=ALC089&event=Tornado+Warning" -o /dev/null "$base/test-alerts"
+          cap=$(sudo -u weatherdispatch /opt/meshcore-weather-dispatch/.venv/bin/python - <<'PY'
+          from dispatch.db import Database
+          print(Database('/var/lib/meshcore-weather-dispatch/dispatch.sqlite3').actionable()[0]['cap_id'])
+          PY
+          )
+          curl -fsS -b /tmp/cookies -d "csrf_token=$csrf&comment=" "$base/alerts/$cap/preview" | grep -q 'message'
+      - name: Upgrade preserves durable state
+        env:
+          UPDATE_BRANCH: integration
+        run: |
+          before_secret=$(sudo sha256sum /etc/meshcore-weather-dispatch/environment | cut -d' ' -f1)
+          sudo -E ./scripts/update.sh
+          test "$before_secret" = "$(sudo sha256sum /etc/meshcore-weather-dispatch/environment | cut -d' ' -f1)"
+          sudo systemctl is-active --quiet meshcore-weather-dispatch
+          sudo -u weatherdispatch /opt/meshcore-weather-dispatch/.venv/bin/python - <<'PY'
+          from dispatch.db import Database
+          db=Database('/var/lib/meshcore-weather-dispatch/dispatch.sqlite3')
+          assert db.credentials()[0]=='ciadmin' and db.coverage() and db.setting('tx_channel')
+          assert db.setting('transmit_enabled')=='false'
+          PY
+      - name: Simulated invalid proxy upgrade rolls back
+        env:
+          UPDATE_BRANCH: integration
+        run: |
+          printf '\ninvalid nginx directive;\n' >> nginx/meshcore-weather-dispatch.conf
+          git add nginx/meshcore-weather-dispatch.conf && git commit -m 'ci intentionally invalid nginx'
+          git push file:///tmp/meshcore-origin.git HEAD:integration
+          if sudo -E ./scripts/update.sh; then echo 'expected upgrade failure'; exit 1; fi
+          sudo systemctl is-active --quiet meshcore-weather-dispatch
+          curl -fsSI http://127.0.0.1/ | grep -qi 'HTTP/'
+          ! sudo grep -q 'invalid nginx directive' /etc/nginx/sites-available/meshcore-weather-dispatch
+          sudo test -d /var/backups/meshcore-weather-dispatch

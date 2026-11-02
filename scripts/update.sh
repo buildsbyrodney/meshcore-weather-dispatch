@@ -2,6 +2,7 @@
 set -euo pipefail
 [[ ${EUID} -eq 0 ]] || { echo 'Run with sudo.' >&2; exit 1; }
 APP=/opt/meshcore-weather-dispatch; ETC=/etc/meshcore-weather-dispatch; STATE=/var/lib/meshcore-weather-dispatch; DB=$STATE/dispatch.sqlite3; BACKUP=/var/backups/meshcore-weather-dispatch/$(date -u +%Y%m%dT%H%M%SZ)
+UPDATE_BRANCH=${UPDATE_BRANCH:-main}
 [[ -d "$APP/.git" ]] || { echo 'Not an updateable Git checkout; refusing update.' >&2; exit 1; }
 runuser -u weatherdispatch -- git -C "$APP" remote get-url origin >/dev/null; runuser -u weatherdispatch -- git -C "$APP" diff --quiet || { echo 'Local application edits detected; refusing update.' >&2; exit 1; }
 grep -q 'Managed by MeshCore Weather Dispatch' /etc/systemd/system/meshcore-weather-dispatch.service || { echo 'Service file is customized; use a systemd .d override and update it manually.' >&2; exit 1; }
@@ -20,7 +21,7 @@ runuser -u weatherdispatch -- sh -c 'cd "$1" && .venv/bin/pip freeze' sh "$APP" 
 rollback(){ echo "Update failed; restoring $OLD. Backups: $BACKUP" >&2; runuser -u weatherdispatch -- git -C "$APP" checkout -q "$OLD" || true; cp -a "$BACKUP/systemd/service" /etc/systemd/system/meshcore-weather-dispatch.service; [[ -f "$BACKUP/nginx/site" ]] && cp -a "$BACKUP/nginx/site" /etc/nginx/sites-available/meshcore-weather-dispatch; runuser -u weatherdispatch -- sh -c 'cd "$1" && .venv/bin/pip install -r "$2" && .venv/bin/pip install -e .' sh "$APP" "$BACKUP/pip-freeze.txt" || echo 'Python dependency rollback needs manual recovery; see pip-freeze.txt.' >&2; systemctl daemon-reload; nginx -t && systemctl reload nginx || true; systemctl start meshcore-weather-dispatch || true; }
 trap rollback ERR
 systemctl stop meshcore-weather-dispatch
-runuser -u weatherdispatch -- git -C "$APP" checkout main; runuser -u weatherdispatch -- git -C "$APP" pull --ff-only origin main
+runuser -u weatherdispatch -- git -C "$APP" checkout "$UPDATE_BRANCH"; runuser -u weatherdispatch -- git -C "$APP" pull --ff-only origin "$UPDATE_BRANCH"
 runuser -u weatherdispatch -- sh -c 'cd "$1" && .venv/bin/pip install --upgrade -e .' sh "$APP"
 install -m 644 "$APP/systemd/meshcore-weather-dispatch.service" /etc/systemd/system/meshcore-weather-dispatch.service
 [[ -e /etc/nginx/sites-enabled/meshcore-weather-dispatch && ! -L /etc/nginx/sites-enabled/meshcore-weather-dispatch ]] && { echo 'Managed Nginx link replaced; refusing overwrite.' >&2; exit 1; }
