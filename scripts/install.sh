@@ -4,7 +4,20 @@ set -euo pipefail
 APP=/opt/meshcore-weather-dispatch; ETC=/etc/meshcore-weather-dispatch; STATE=/var/lib/meshcore-weather-dispatch
 REPO_URL=${REPO_URL:-https://github.com/buildsbyrodney/meshcore-weather-dispatch.git}
 APP_BRANCH=${APP_BRANCH:-main}
-[[ ! -e "$APP" ]] || { echo "$APP already exists; use scripts/update.sh instead." >&2; exit 1; }
+if [[ -e "$APP" ]]; then
+ if [[ -e "$ETC/environment" || -e "$STATE/dispatch.sqlite3" ]]; then
+  echo "$APP already exists with application state; use scripts/update.sh instead." >&2
+ else
+  cat >&2 <<EOF
+An incomplete initial installation was found at $APP. No files were changed.
+Inspect it before removal. If this is only the interrupted checkout and neither
+$ETC/environment nor $STATE/dispatch.sqlite3 exists, remove that checkout with:
+  sudo test ! -e $ETC/environment && sudo test ! -e $STATE/dispatch.sqlite3 && sudo rm -rf $APP
+Then rerun this installer from a fresh source checkout.
+EOF
+ fi
+ exit 1
+fi
 ss -ltnH '( sport = :80 )' | grep -q . && { echo 'Port 80 is already in use; nothing was changed.' >&2; exit 1; }
 apt-get update; apt-get install -y nginx git python3-venv python3-pip curl
 # On Debian-family systems, do not turn this host into the default site while
@@ -21,8 +34,9 @@ for site in /etc/nginx/sites-enabled/*; do
  fi
 done
 id weatherdispatch >/dev/null 2>&1 || adduser --system --group --home "$APP" weatherdispatch
-install -d -o weatherdispatch -g weatherdispatch -m 750 "$ETC" "$STATE"
-git clone --branch "$APP_BRANCH" --single-branch "$REPO_URL" "$APP"; git -C "$APP" remote get-url origin >/dev/null; chown -R weatherdispatch:weatherdispatch "$APP"
+install -d -o weatherdispatch -g weatherdispatch -m 750 "$APP" "$ETC" "$STATE"
+runuser -u weatherdispatch -- sh -c 'cd /tmp && exec git clone --branch "$1" --single-branch "$2" "$3"' sh "$APP_BRANCH" "$REPO_URL" "$APP"
+runuser -u weatherdispatch -- sh -c 'cd /tmp && exec git -C "$1" remote get-url origin' sh "$APP" >/dev/null
 runuser -u weatherdispatch -- sh -c 'cd "$1" && python3 -m venv .venv && .venv/bin/pip install --upgrade -e .' sh "$APP"
 read -rp 'Administrator username [weatheradmin]: ' USER; USER=${USER:-weatheradmin}; read -rp 'NWS contact email: ' EMAIL; read -rp 'NWS states (e.g. AL,TN): ' STATES; read -rsp 'Initial administrator password: ' PASS; echo
 printf '%s\n' "$PASS" | "$APP/.venv/bin/python" -m dispatch.bootstrap --config "$ETC/config.yml" --environment "$ETC/environment" --database "$STATE/dispatch.sqlite3" --username "$USER" --email "$EMAIL" --states "$STATES" --password-stdin; unset PASS

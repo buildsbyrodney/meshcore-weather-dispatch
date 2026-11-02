@@ -30,12 +30,22 @@ jobs:
           REPO_URL: file:///tmp/meshcore-origin.git
           APP_BRANCH: integration
         run: |
+          # Git must keep rejecting a root-owned checkout for the service user.
+          # The installer then proves it avoids this by cloning as weatherdispatch.
+          sudo adduser --system --group --home /nonexistent weatherdispatch
+          sudo git clone --branch integration --single-branch file:///tmp/meshcore-origin.git /tmp/root-owned-weather-dispatch
+          if sudo -u weatherdispatch env HOME=/nonexistent GIT_CONFIG_NOSYSTEM=1 git -c safe.directory= -C /tmp/root-owned-weather-dispatch status >/tmp/dubious.out 2>&1; then
+            echo 'expected Git dubious-ownership protection'; exit 1
+          fi
+          grep -q 'detected dubious ownership' /tmp/dubious.out
+          sudo rm -rf /tmp/root-owned-weather-dispatch
           printf 'ciadmin\nci@example.invalid\nAL\nci-password-long-enough\n' | sudo -E bash "$GITHUB_WORKSPACE/scripts/install.sh"
           sudo systemctl is-active --quiet nginx meshcore-weather-dispatch
           sudo ss -ltn | grep -q '127.0.0.1:8080'
           ! sudo ss -ltn | grep -qE '0\.0\.0\.0:8080|\[::\]:8080'
           sudo test -d /opt/meshcore-weather-dispatch/.git
           sudo -u weatherdispatch git -C /opt/meshcore-weather-dispatch remote get-url origin | grep -q /tmp/meshcore-origin.git
+          test -z "$(sudo -u weatherdispatch git -C /opt/meshcore-weather-dispatch status --porcelain)"
           ! sudo grep -q '^MESHCORE_SEND_ENABLED=' /etc/meshcore-weather-dispatch/environment
       - name: Exercise authenticated proxy workflow
         run: |
