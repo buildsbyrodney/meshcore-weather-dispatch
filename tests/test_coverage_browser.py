@@ -125,8 +125,10 @@ def test_transmission_statuses_and_checkbox_stay_compact_on_mobile(tmp_path,monk
                 page.fill('input[name="username"]',"admin");page.fill('input[name="password"]',"browser-password");page.click('button:has-text("Sign in")')
                 page.goto(f"http://127.0.0.1:{server.server_port}/settings")
                 assert page.locator(".transmission-status .interlock-status").count()==4
-                columns=page.locator(".transmission-status").evaluate("node => getComputedStyle(node).gridTemplateColumns.split(' ').length")
-                assert columns==2
+                cards=page.locator(".transmission-status .interlock-status").all()
+                boxes=[card.bounding_box() for card in cards]
+                assert all(box and box["x"] >= 0 and box["x"]+box["width"] <= 375 for box in boxes)
+                assert len({round(box["y"]) for box in boxes})==2
                 checkbox=page.locator('.inline-check input[type="checkbox"]').bounding_box()
                 wording=page.locator(".inline-check span").bounding_box()
                 assert checkbox and wording and checkbox["x"] < wording["x"]
