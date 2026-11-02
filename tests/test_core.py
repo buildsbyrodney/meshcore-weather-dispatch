@@ -166,9 +166,11 @@ def test_manual_send_is_audited(tmp_path,monkeypatch):
  cfg=config(tmp_path);cfg["max_message_bytes"]=180;app=create_app(cfg); ingest(app,[feature()]); client=app.test_client()
  with client.session_transaction() as s: s["user"]="admin"
  app.extensions["db"].save_setting("tx_channel",'{"index": 2, "name": "#wx-test"}')
+ app.extensions["db"].save_setting("transmit_enabled","true")
  token=csrf_token(client)
  monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({}, {"device":"/dev/ttyACM0"}, "Connected"))
  monkeypatch.setattr("dispatch.routes.verify_channel",lambda dev, channel: channel)
+ monkeypatch.setattr("dispatch.routes.send",lambda *args:"accepted")
  preview=alert_preview(client,"new",token,"Test").get_json()
  assert client.post("/alerts/new/send",data={"csrf_token":token,"comment":"Test","confirm":"yes","preview_token":preview["token"]}).status_code==302
  assert app.extensions["db"].get("new")["status"]=="sent"
