@@ -1,6 +1,7 @@
 """SQLite-backed operational settings with installer-managed service configuration."""
 from __future__ import annotations
 import json, re
+from .version import VERSION
 
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 STATE = re.compile(r"^[A-Z]{2}$")
@@ -16,7 +17,7 @@ def states(value) -> list[str]:
     if not result or any(not STATE.fullmatch(item) for item in result): raise ValueError("select one or more two-letter NWS state codes")
     return result
 
-def user_agent(email: str) -> str: return f"MeshCoreWeatherDispatch/0.1 ({contact_email(email)})"
+def user_agent(email: str) -> str: return f"MeshCoreWeatherDispatch/{VERSION} ({contact_email(email)})"
 
 def _json(value, fallback):
     try: return json.loads(value) if value is not None else fallback

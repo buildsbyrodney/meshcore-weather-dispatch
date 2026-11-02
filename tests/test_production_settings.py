@@ -1,10 +1,12 @@
-import stat
+import stat, tomllib
+from pathlib import Path
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from dispatch import create_app, load_config
 from dispatch.bootstrap import initialize
 from dispatch.poller import fetch
-from dispatch.runtime import runtime_config
+from dispatch.runtime import runtime_config, user_agent
+from dispatch.version import VERSION
 
 
 def cfg(tmp_path):
@@ -57,6 +59,12 @@ def test_manual_transmission_defaults_enabled_and_existing_setting_is_preserved(
     db.save_setting("transmit_enabled","false")
     db.bootstrap_operational_settings({"transmit_enabled":True})
     assert db.setting("transmit_enabled")=="false"
+
+def test_release_version_is_used_in_the_nws_user_agent():
+    metadata=tomllib.loads((Path(__file__).parents[1]/"pyproject.toml").read_text(encoding="utf-8"))
+    assert metadata["project"]["version"]=="1.0.0rc1"
+    assert VERSION=="1.0.0-rc.1"
+    assert user_agent("operator@example.org")=="MeshCoreWeatherDispatch/1.0.0-rc.1 (operator@example.org)"
 
 def test_transmission_settings_show_manual_permission_and_readiness_requirements(tmp_path):
     app=create_app(cfg(tmp_path));db=app.extensions["db"]

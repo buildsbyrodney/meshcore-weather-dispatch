@@ -7,11 +7,19 @@ APP_BRANCH=${APP_BRANCH:-main}
 [[ ! -e "$APP" ]] || { echo "$APP already exists; use scripts/update.sh instead." >&2; exit 1; }
 ss -ltnH '( sport = :80 )' | grep -q . && { echo 'Port 80 is already in use; nothing was changed.' >&2; exit 1; }
 apt-get update; apt-get install -y nginx git python3-venv python3-pip curl
-if [[ -e /etc/nginx/sites-enabled/default ]]; then
- target=$(readlink -f /etc/nginx/sites-enabled/default || true)
- [[ "$target" == /etc/nginx/sites-available/default ]] && grep -q 'Default server configuration' "$target" || { echo 'Existing Nginx site found; refusing to replace it.' >&2; exit 1; }
- rm /etc/nginx/sites-enabled/default
-fi
+# On Debian-family systems, do not turn this host into the default site while
+# another enabled virtual host exists.  This remains safe even when Nginx was
+# installed but stopped, so a port scan alone is not sufficient.
+for site in /etc/nginx/sites-enabled/*; do
+ [[ -e "$site" ]] || continue
+ target=$(readlink -f "$site" || true)
+ if [[ "$target" == /etc/nginx/sites-available/default ]] && grep -q 'Default server configuration' "$target"; then
+  rm "$site"
+ else
+  echo "Existing Nginx site found at $site; refusing to replace or shadow it." >&2
+  exit 1
+ fi
+done
 id weatherdispatch >/dev/null 2>&1 || adduser --system --group --home "$APP" weatherdispatch
 install -d -o weatherdispatch -g weatherdispatch -m 750 "$ETC" "$STATE"
 git clone --branch "$APP_BRANCH" --single-branch "$REPO_URL" "$APP"; git -C "$APP" remote get-url origin >/dev/null; chown -R weatherdispatch:weatherdispatch "$APP"
