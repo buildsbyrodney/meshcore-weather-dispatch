@@ -60,10 +60,10 @@ def test_web_transmission_setting_starts_disabled_and_is_separate_from_environme
 @pytest.mark.parametrize(
     "web,emergency,dry_run,effective,blocked_by",
     [
-        (False, "0", False, "Blocked", "Web transmission permission is disabled."),
-        (True, "0", False, "Blocked", "The server emergency interlock is disabled."),
-        (True, "1", True, "Blocked", "Dry-run mode is enabled."),
-        (True, "1", False, "Enabled", None),
+        (False, "0", False, "Block sending", "Web transmission permission is disabled."),
+        (True, "0", False, "Block sending", "The server emergency interlock is disabled."),
+        (True, "1", True, "Block sending", "Dry-run mode is enabled."),
+        (True, "1", False, "Permit manual sending", None),
     ],
 )
 def test_transmission_settings_render_each_interlock_without_exposing_emergency_control(tmp_path,monkeypatch,web,emergency,dry_run,effective,blocked_by):
@@ -72,8 +72,8 @@ def test_transmission_settings_render_each_interlock_without_exposing_emergency_
     client=app.test_client();signed_in(client)
     page=client.get("/settings").data.decode()
     assert 'class="transmission-status"' in page
-    assert "Web permission" in page and "Emergency interlock" in page and "Dry-run mode" in page and "Effective radio TX" in page
-    assert f"Effective radio TX</b><span>{effective}</span>" in page
+    assert "Web permission" in page and "Emergency interlock" in page and "Dry-run mode" in page and "TX interlocks" in page
+    assert f"TX interlocks</b><span>{effective}</span>" in page
     assert 'class="inline-check"' in page
     assert 'name="MESHCORE_SEND_ENABLED"' not in page
     if blocked_by:

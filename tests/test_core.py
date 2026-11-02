@@ -236,7 +236,7 @@ def test_connection_state_is_compact_and_interlock_feedback_remains_visible(tmp_
  monkeypatch.setattr("dispatch.routes.read_device_name",lambda dev:"WXALERT")
  settings=client.get("/settings").data.decode()
  messaging=client.get("/test-messaging").data.decode()
- assert 'class="status-line"' in settings and "Connected by stable path" in settings and "TX Disabled" in settings
+ assert 'class="status-line"' in settings and "Connected by stable path" in settings and "TX interlocks: block sending" in settings
  assert "Transmission interlocks are disabled or configuration is incomplete." not in messaging
  assert 'class="status-line"' in messaging and "TX Disabled" in messaging
  assert "Manual dispatch only. A Companion accepting" not in client.get("/").data.decode()
