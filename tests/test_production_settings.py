@@ -1,4 +1,5 @@
 import os, stat
+import pytest
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from dispatch import create_app, load_config
@@ -55,3 +56,27 @@ def test_web_transmission_setting_starts_disabled_and_is_separate_from_environme
     client.post("/settings/transmission",data={"csrf_token":token(client),"transmit_enabled":"yes"})
     assert runtime_config(app.config,db)["transmit_enabled"] is True
     assert os.environ.get("MESHCORE_SEND_ENABLED") != "1"
+
+@pytest.mark.parametrize(
+    "web,emergency,dry_run,effective,blocked_by",
+    [
+        (False, "0", False, "Block sending", "Web transmission permission is disabled."),
+        (True, "0", False, "Block sending", "The server emergency interlock is disabled."),
+        (True, "1", True, "Block sending", "Dry-run mode is enabled."),
+        (True, "1", False, "Permit manual sending", None),
+    ],
+)
+def test_transmission_settings_render_each_interlock_without_exposing_emergency_control(tmp_path,monkeypatch,web,emergency,dry_run,effective,blocked_by):
+    config=cfg(tmp_path);config["dry_run"]=dry_run;app=create_app(config);db=app.extensions["db"];db.save_setting("transmit_enabled","true" if web else "false")
+    monkeypatch.setenv("MESHCORE_SEND_ENABLED",emergency)
+    client=app.test_client();signed_in(client)
+    page=client.get("/settings").data.decode()
+    assert 'class="transmission-status"' in page
+    assert "Web permission" in page and "Emergency interlock" in page and "Dry-run mode" in page and "TX interlocks" in page
+    assert f"TX interlocks</b><span>{effective}</span>" in page
+    assert 'class="inline-check"' in page
+    assert 'name="MESHCORE_SEND_ENABLED"' not in page
+    if blocked_by:
+        assert "Transmission is blocked:" in page and blocked_by in page
+    else:
+        assert "Manual sending is permitted by these interlocks." in page
