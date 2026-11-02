@@ -9,8 +9,8 @@ poll_seconds: 60
 timezone: America/Chicago
 # The supplied systemd unit uses one worker; leave this enabled for NWS polling.
 start_poller: true
-# Set true only when the reverse proxy serves HTTPS (recommended for deployment).
-session_cookie_secure: true
+# Initial trusted-LAN HTTP setup needs false. Set true before enabling HTTPS.
+session_cookie_secure: false
 alert_types: ["Tornado Warning", "Severe Thunderstorm Warning", "Flash Flood Warning"]
 # Select a read-only discovered Companion channel in Settings after installation.
 max_message_bytes: 180

@@ -25,6 +25,10 @@ For development only, provide a password hash and states in local test configura
 
 ## Install on Raspberry Pi OS Lite / Debian
 
+For a new production installation, use `sudo ./scripts/install.sh` from the release checkout. It installs Nginx, refuses an already-occupied port 80 or an unrelated Nginx site, keeps Gunicorn on `127.0.0.1:8080`, creates the protected files and administrator account, validates Nginx, and prints the trusted-LAN URL `http://<Pi-IP>/`. Test login, Settings, Test Alerts, and dispatch previews through that URL; CSRF and session cookies are proxied normally. No radio message is sent by installation.
+
+Initial HTTP is appropriate only on a trusted LAN: the installer sets `session_cookie_secure: false` so browser sessions work over HTTP. For remote or untrusted access, place an HTTPS certificate/reverse proxy in front of Nginx, set `session_cookie_secure: true` in the installer-managed config, restrict firewall access, validate `nginx -t`, then restart the service. Do not expose port 8080; it is loopback-only. Use `sudo ./scripts/update.sh` for ordinary upgrades; it preserves the environment secret, SQLite data, selected radio, and existing Nginx site.
+
 1. Install prerequisites: `sudo apt update && sudo apt install -y python3-venv python3-pip`.
 2. Create a dedicated user: `sudo adduser --system --group --home /opt/meshcore-weather-dispatch weatherdispatch`.
 3. Copy this project to `/opt/meshcore-weather-dispatch`, create a virtual environment as that user, then install `pip install -e .`.

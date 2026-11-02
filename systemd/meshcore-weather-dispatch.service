@@ -1,7 +1,7 @@
 [Unit]
 Description=MeshCore Weather Dispatch (manual NWS alert console)
-After=network-online.target
-Wants=network-online.target
+After=network-online.target nginx.service
+Wants=network-online.target nginx.service
 
 [Service]
 Type=simple

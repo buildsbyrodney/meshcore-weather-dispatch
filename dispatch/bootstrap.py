@@ -7,7 +7,7 @@ from werkzeug.security import generate_password_hash
 from .db import Database
 from .runtime import contact_email, states
 
-SERVICE_DEFAULTS={"database":"/var/lib/meshcore-weather-dispatch/dispatch.sqlite3","host":"127.0.0.1","port":8080,"secret_key_env":"WEATHER_DISPATCH_SECRET_KEY","poll_seconds":60,"timezone":"UTC","start_poller":True,"session_cookie_secure":True,"alert_types":["Tornado Warning","Severe Thunderstorm Warning","Flash Flood Warning"],"max_message_bytes":180,"dry_run":True,"device":None}
+SERVICE_DEFAULTS={"database":"/var/lib/meshcore-weather-dispatch/dispatch.sqlite3","host":"127.0.0.1","port":8080,"secret_key_env":"WEATHER_DISPATCH_SECRET_KEY","poll_seconds":60,"timezone":"UTC","start_poller":True,"session_cookie_secure":False,"alert_types":["Tornado Warning","Severe Thunderstorm Warning","Flash Flood Warning"],"max_message_bytes":180,"dry_run":True,"device":None}
 
 def _write_private(path: Path, text: str):
     path.parent.mkdir(parents=True,exist_ok=True);path.write_text(text,encoding="utf-8");os.chmod(path,0o600)

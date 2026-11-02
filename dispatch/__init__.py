@@ -6,6 +6,7 @@ from pathlib import Path
 import yaml
 from flask import Flask
 from flask_wtf.csrf import CSRFProtect
+from werkzeug.middleware.proxy_fix import ProxyFix
 from .db import Database
 from .routes import bp
 from .timefmt import local_time, compact_local_time, system_timezone
@@ -40,6 +41,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.config.update(config, SECRET_KEY=config["secret_key"], WTF_CSRF_TIME_LIMIT=3600,
                       SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
                       SESSION_COOKIE_SECURE=bool(config.get("session_cookie_secure", False)))
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
     app.extensions["db"] = Database(app.config["database"])
     app.jinja_env.filters["localtime"] = lambda value: local_time(value, app.extensions["db"].setting("timezone") or app.config.get("timezone") or system_timezone())
     app.jinja_env.filters["compacttime"] = lambda value: compact_local_time(value, app.extensions["db"].setting("timezone") or app.config.get("timezone") or system_timezone())
