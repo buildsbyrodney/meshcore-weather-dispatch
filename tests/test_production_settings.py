@@ -1,5 +1,6 @@
-import stat, tomllib
+import os, stat, tomllib
 from pathlib import Path
+import pytest
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from dispatch import create_app, load_config
@@ -21,12 +22,19 @@ def test_bootstrap_generates_private_secret_once_and_seeds_sqlite(tmp_path):
     config_path=tmp_path/"etc"/"config.yml"; environment=tmp_path/"etc"/"environment";database=tmp_path/"state"/"dispatch.sqlite3"
     initialize(config_path,environment,database,"weatheradmin","password-long-enough","operator@example.org","AL,TN")
     first=environment.read_text(); assert "WEATHER_DISPATCH_SECRET_KEY=" in first and "MESHCORE_SEND_ENABLED" not in first
-    assert stat.S_IMODE(environment.stat().st_mode)==0o600 and stat.S_IMODE(config_path.stat().st_mode)==0o600
+    if os.name != "nt": assert stat.S_IMODE(environment.stat().st_mode)==0o600 and stat.S_IMODE(config_path.stat().st_mode)==0o600
     initialize(config_path,environment,database,"weatheradmin","changed-password-long","operator@example.org","AL,TN")
     assert environment.read_text()==first
     app=create_app({**cfg(tmp_path),"database":str(database)})
     username,password_hash=app.extensions["db"].credentials()
     assert username=="weatheradmin" and check_password_hash(password_hash,"changed-password-long") and app.extensions["db"].setting("transmit_enabled")=="true"
+
+def test_bootstrap_accepts_simple_six_character_password_and_rejects_shorter_one(tmp_path):
+    config_path=tmp_path/"etc"/"config.yml"; environment=tmp_path/"etc"/"environment";database=tmp_path/"state"/"dispatch.sqlite3"
+    initialize(config_path,environment,database,"weatheradmin","simple","operator@example.org","AL")
+    assert check_password_hash(create_app({**cfg(tmp_path),"database":str(database)}).extensions["db"].credentials()[1],"simple")
+    with pytest.raises(ValueError,match="at least 6 characters"):
+        initialize(tmp_path/"short.yml",tmp_path/"short.env",tmp_path/"short.sqlite3","weatheradmin","short","operator@example.org","AL")
 
 def test_nws_settings_are_dynamic_and_do_not_discard_out_of_state_counties(tmp_path):
     app=create_app(cfg(tmp_path));db=app.extensions["db"];client=app.test_client();signed_in(client)
@@ -44,6 +52,13 @@ def test_account_change_requires_current_password_and_rehashes(tmp_path):
     assert db.credentials()[0]=="admin"
     client.post("/settings/account",data={"csrf_token":token(client),"username":"newadmin","current_password":"current-password","new_password":"new-password-long","confirm_password":"new-password-long"})
     username,password_hash=db.credentials();assert username=="newadmin" and check_password_hash(password_hash,"new-password-long")
+
+def test_account_password_mismatch_is_rejected_and_simple_six_character_password_is_accepted(tmp_path):
+    app=create_app(cfg(tmp_path));db=app.extensions["db"];client=app.test_client();signed_in(client)
+    response=client.post("/settings/account",data={"csrf_token":token(client),"username":"admin","current_password":"current-password","new_password":"simple","confirm_password":"different"},follow_redirects=True)
+    assert "confirmation does not match" in response.data.decode() and check_password_hash(db.credentials()[1],"current-password")
+    client.post("/settings/account",data={"csrf_token":token(client),"username":"admin","current_password":"current-password","new_password":"simple","confirm_password":"simple"})
+    assert check_password_hash(db.credentials()[1],"simple")
 
 def test_unconfigured_new_install_never_polls_all_states(tmp_path,monkeypatch):
     fresh=cfg(tmp_path);fresh.pop("states");fresh.pop("nws_user_agent")
