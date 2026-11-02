@@ -35,6 +35,15 @@ sudo ./scripts/install.sh
 
 The installer prompts for an administrator username, NWS contact email, polling state codes such as `AL,TN`, and an initial password twice. Administrator passwords require at least six characters; no character-type or periodic-change policy applies. It prints the trusted-LAN URL when the service responds, normally `http://<Pi-IP>/`.
 
+Before opening the web interface, grant the service account permission to communicate with USB serial devices and reboot the Pi:
+
+```bash
+sudo usermod -aG dialout weatherdispatch
+sudo reboot
+```
+
+Membership in `dialout` lets MeshCore Weather Dispatch access a USB serial Companion. The reboot activates that membership and also ensures Nginx loads the Weather Dispatch site instead of its default welcome page; no separate service restart is needed when these steps are followed.
+
 If power, networking, or a package operation interrupts the first install after the application checkout is created, rerunning the installer stops safely rather than reusing it. First confirm that no initial state was created, then remove only the incomplete application checkout and rerun from the source checkout:
 
 ```bash
@@ -71,11 +80,11 @@ Coverage changes take effect on the next NWS poll and in Test Alerts without a s
 Connect the Companion over USB, then open **Settings → Companion device**.
 
 1. Rescan USB devices and select the intended device. The scan itself does not open, alter, or select a radio automatically.
-2. Use **Test selected connection** for the read-only Companion handshake. If Linux denies access, add the service account to `dialout`, then restart the service:
+2. Use **Test selected connection** for the read-only Companion handshake. If Linux denies access, add the service account to `dialout` and reboot:
 
    ```bash
    sudo usermod -aG dialout weatherdispatch
-   sudo systemctl restart meshcore-weather-dispatch
+   sudo reboot
    ```
 
 3. Discover the configured channels and explicitly select the desired transmit channel by name. The app records its slot internally and rechecks the name and slot immediately before every send.
@@ -124,7 +133,8 @@ Do not replace the environment file or rerun the initializer during an ordinary 
 | --- | --- |
 | Page is unavailable | `sudo systemctl status nginx meshcore-weather-dispatch --no-pager`, then `sudo journalctl -u meshcore-weather-dispatch -n 100 --no-pager`. |
 | Port 80 installation refusal | Do not remove another application blindly. Resolve the existing web-server/site ownership or use a dedicated host. |
-| Companion permission error | Add `weatherdispatch` to `dialout`, reconnect the device, and restart the service. |
+| Companion permission error | Run `sudo usermod -aG dialout weatherdispatch`, then `sudo reboot`; this grants the service account access to USB serial devices. |
+| Nginx welcome page | Run `sudo reboot`. If it remains, run `sudo nginx -t` and `sudo systemctl reload nginx`, then check `sudo systemctl status nginx --no-pager`. |
 | No transmit channel | Select a verified saved Companion, discover channels, and explicitly select one. |
 | Send is blocked | Check manual transmission permission, alert eligibility, message byte count, device/channel validation, and the exact preview confirmation. |
 | NWS feed stale | Verify LAN/DNS access, contact email, selected states/counties, and the NWS service; the dashboard retains the error. |
