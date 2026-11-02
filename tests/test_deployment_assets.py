@@ -7,7 +7,7 @@ def test_nginx_keeps_gunicorn_loopback_only_and_forwards_required_headers():
     service=(ROOT/"systemd"/"meshcore-weather-dispatch.service").read_text()
     assert "listen 80 default_server" in config and "proxy_pass http://127.0.0.1:8080" in config
     assert "X-Forwarded-Proto" in config and "client_max_body_size 64k" in config
-    assert "--workers 1 --bind 127.0.0.1:8080" in service and "nginx.service" in service
+    assert "--workers 1" in service and "--bind 127.0.0.1:8080" in service and "--worker-tmp-dir /dev/shm" in service and "nginx.service" in service
 
 def test_install_and_update_scripts_keep_port_80_and_existing_sites_safe():
     install=(ROOT/"scripts"/"install.sh").read_text(); update=(ROOT/"scripts"/"update.sh").read_text()
