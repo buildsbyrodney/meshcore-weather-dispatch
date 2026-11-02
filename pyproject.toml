@@ -1,6 +1,6 @@
 [project]
 name = "meshcore-weather-dispatch"
-version = "0.1.0"
+version = "1.0.0rc1"
 description = "Human-approved NWS alert dispatch console for MeshCore"
 requires-python = ">=3.11"
 dependencies = ["Flask>=3.0", "Flask-WTF>=1.2", "requests>=2.31", "pyserial>=3.5", "PyYAML>=6.0", "tzdata>=2024.1", "meshcore>=2.0", "gunicorn>=22.0"]
