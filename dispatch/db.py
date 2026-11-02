@@ -42,7 +42,7 @@ class Database:
             c.execute("CREATE INDEX IF NOT EXISTS idx_alert_family ON alerts(family_id, created_at)")
     def bootstrap_operational_settings(self, config):
         """Seed web-managed values once; never overwrite an operator's changes."""
-        values={"auth_username":config.get("admin_username", ""),"auth_password_hash":config.get("admin_password_hash", ""),"nws_states":json.dumps(config.get("states",[])),"nws_poll_seconds":str(max(60,int(config.get("poll_seconds",60)))),"transmit_enabled":"true" if config.get("transmit_enabled",False) else "false"}
+        values={"auth_username":config.get("admin_username", ""),"auth_password_hash":config.get("admin_password_hash", ""),"nws_states":json.dumps(config.get("states",[])),"nws_poll_seconds":str(max(60,int(config.get("poll_seconds",60)))),"transmit_enabled":"true" if config.get("transmit_enabled",True) else "false"}
         candidate=str(config.get("nws_user_agent","")).rsplit(" ",1)[-1].strip("() ")
         if "@" in candidate: values["nws_contact_email"]=candidate
         with self.connect() as c:

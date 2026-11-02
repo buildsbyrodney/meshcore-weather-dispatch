@@ -1,6 +1,6 @@
-"""SQLite-backed operational settings with service-config and emergency overrides."""
+"""SQLite-backed operational settings with installer-managed service configuration."""
 from __future__ import annotations
-import json, os, re
+import json, re
 
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 STATE = re.compile(r"^[A-Z]{2}$")
@@ -36,4 +36,4 @@ def runtime_config(config: dict, db) -> dict:
     return out
 
 def transmissions_enabled(config: dict, db) -> bool:
-    return bool(runtime_config(config,db).get("transmit_enabled") and os.environ.get("MESHCORE_SEND_ENABLED")=="1")
+    return bool(runtime_config(config,db).get("transmit_enabled"))

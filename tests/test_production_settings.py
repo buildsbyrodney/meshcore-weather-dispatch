@@ -1,5 +1,4 @@
-import os, stat
-import pytest
+import stat
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from dispatch import create_app, load_config
@@ -9,7 +8,7 @@ from dispatch.runtime import runtime_config
 
 
 def cfg(tmp_path):
-    return {"TESTING":True,"secret_key":"test","database":str(tmp_path/"settings.sqlite"),"admin_username":"admin","admin_password_hash":generate_password_hash("current-password"),"nws_user_agent":"MeshCoreWeatherDispatch/0.1 old@example.invalid","states":["AL","TN"],"alert_types":["Tornado Warning"],"counties":[],"max_message_bytes":80,"dry_run":True,"transmit_enabled":False,"poll_seconds":60,"start_poller":False}
+    return {"TESTING":True,"secret_key":"test","database":str(tmp_path/"settings.sqlite"),"admin_username":"admin","admin_password_hash":generate_password_hash("current-password"),"nws_user_agent":"MeshCoreWeatherDispatch/0.1 old@example.invalid","states":["AL","TN"],"alert_types":["Tornado Warning"],"counties":[],"max_message_bytes":80,"transmit_enabled":False,"poll_seconds":60,"start_poller":False}
 
 def token(client): return client.get("/settings").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
 
@@ -19,13 +18,13 @@ def signed_in(client):
 def test_bootstrap_generates_private_secret_once_and_seeds_sqlite(tmp_path):
     config_path=tmp_path/"etc"/"config.yml"; environment=tmp_path/"etc"/"environment";database=tmp_path/"state"/"dispatch.sqlite3"
     initialize(config_path,environment,database,"weatheradmin","password-long-enough","operator@example.org","AL,TN")
-    first=environment.read_text(); assert "WEATHER_DISPATCH_SECRET_KEY=" in first and "MESHCORE_SEND_ENABLED=0" in first
+    first=environment.read_text(); assert "WEATHER_DISPATCH_SECRET_KEY=" in first and "MESHCORE_SEND_ENABLED" not in first
     assert stat.S_IMODE(environment.stat().st_mode)==0o600 and stat.S_IMODE(config_path.stat().st_mode)==0o600
     initialize(config_path,environment,database,"weatheradmin","changed-password-long","operator@example.org","AL,TN")
     assert environment.read_text()==first
     app=create_app({**cfg(tmp_path),"database":str(database)})
     username,password_hash=app.extensions["db"].credentials()
-    assert username=="weatheradmin" and check_password_hash(password_hash,"changed-password-long")
+    assert username=="weatheradmin" and check_password_hash(password_hash,"changed-password-long") and app.extensions["db"].setting("transmit_enabled")=="true"
 
 def test_nws_settings_are_dynamic_and_do_not_discard_out_of_state_counties(tmp_path):
     app=create_app(cfg(tmp_path));db=app.extensions["db"];client=app.test_client();signed_in(client)
@@ -50,33 +49,20 @@ def test_unconfigured_new_install_never_polls_all_states(tmp_path,monkeypatch):
     fetch(app)
     assert not called and "not configured" in app.extensions["db"].setting("nws_last_error")
 
-def test_web_transmission_setting_starts_disabled_and_is_separate_from_environment(tmp_path,monkeypatch):
+def test_manual_transmission_defaults_enabled_and_existing_setting_is_preserved(tmp_path,monkeypatch):
     app=create_app(cfg(tmp_path));db=app.extensions["db"];client=app.test_client();signed_in(client)
     assert runtime_config(app.config,db)["transmit_enabled"] is False
     client.post("/settings/transmission",data={"csrf_token":token(client),"transmit_enabled":"yes"})
     assert runtime_config(app.config,db)["transmit_enabled"] is True
-    assert os.environ.get("MESHCORE_SEND_ENABLED") != "1"
+    db.save_setting("transmit_enabled","false")
+    db.bootstrap_operational_settings({"transmit_enabled":True})
+    assert db.setting("transmit_enabled")=="false"
 
-@pytest.mark.parametrize(
-    "web,emergency,dry_run,effective,blocked_by",
-    [
-        (False, "0", False, "Block sending", "Web transmission permission is disabled."),
-        (True, "0", False, "Block sending", "The server emergency interlock is disabled."),
-        (True, "1", True, "Block sending", "Dry-run mode is enabled."),
-        (True, "1", False, "Permit manual sending", None),
-    ],
-)
-def test_transmission_settings_render_each_interlock_without_exposing_emergency_control(tmp_path,monkeypatch,web,emergency,dry_run,effective,blocked_by):
-    config=cfg(tmp_path);config["dry_run"]=dry_run;app=create_app(config);db=app.extensions["db"];db.save_setting("transmit_enabled","true" if web else "false")
-    monkeypatch.setenv("MESHCORE_SEND_ENABLED",emergency)
+def test_transmission_settings_show_manual_permission_and_readiness_requirements(tmp_path):
+    app=create_app(cfg(tmp_path));db=app.extensions["db"]
     client=app.test_client();signed_in(client)
     page=client.get("/settings").data.decode()
-    assert 'class="transmission-status"' in page
-    assert "Web permission" in page and "Emergency interlock" in page and "Dry-run mode" in page and "TX interlocks" in page
-    assert f"TX interlocks</b><span>{effective}</span>" in page
+    assert "Companion:" in page and "Transmit channel:" in page and "Manual transmissions disabled" in page
+    assert "Allow Manual Transmissions" in page
     assert 'class="inline-check"' in page
-    assert 'name="MESHCORE_SEND_ENABLED"' not in page
-    if blocked_by:
-        assert "Transmission is blocked:" in page and blocked_by in page
-    else:
-        assert "Manual sending is permitted by these interlocks." in page
+    assert "dry-run" not in page.lower() and "interlock" not in page.lower()

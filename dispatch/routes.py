@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, os, requests
+import json, requests
 from uuid import uuid4
 from datetime import datetime, timezone
 from functools import wraps
@@ -24,15 +24,6 @@ def admin(fn):
  return wrapped
 def saved_channel(db): return json.loads(db.setting("tx_channel") or "null")
 def app_timezone(db): return db.setting("timezone") or current_app.config.get("timezone") or system_timezone()
-def transmission_status(config, db):
- """Presentation-only summary of the independent send interlocks."""
- cfg=runtime_config(config,db)
- web=bool(cfg.get("transmit_enabled")); emergency=os.environ.get("MESHCORE_SEND_ENABLED")=="1"; dry_run=bool(config.get("dry_run"))
- reasons=[]
- if not web: reasons.append("Web transmission permission is disabled.")
- if not emergency: reasons.append("The server emergency interlock is disabled.")
- if dry_run: reasons.append("Dry-run mode is enabled.")
- return {"web":web,"emergency":emergency,"dry_run":dry_run,"effective":web and emergency and not dry_run,"reasons":reasons}
 def device_state(db):
  saved=json.loads(db.setting("device") or "null"); dev,status=resolve_device(saved,scan_devices()); return saved,dev,status
 def feed_state(db):
@@ -131,14 +122,14 @@ def settings():
  if request.method=="POST":
   value=request.form.get("device");db.save_setting("device",value or "null");db.save_setting("tx_channel","null")
   flash("Device selection saved. Transmit channel cleared and must be selected for this device.");return redirect(url_for("console.settings"))
- cfg=runtime_config(current_app.config,db);transmission=transmission_status(current_app.config,db);coverage=db.coverage();coverage_states=", ".join(cfg["states"]) or "none"; unsupported=sum(1 for row in coverage if row["state"] not in cfg["states"])
+ cfg=runtime_config(current_app.config,db);coverage=db.coverage();coverage_states=", ".join(cfg["states"]) or "none"; unsupported=sum(1 for row in coverage if row["state"] not in cfg["states"])
  saved,dev,status=device_state(db);channels=[];channel_error=None;discovery=None;radio_name=None;name_error=None;cached_radio_name=db.setting("device_name") or ""
  if dev:
   try: discovery=discover_channels(dev);channels=[{"index":x["index"],"name":x["name"]} for x in discovery["slots"] if x["name"]]
   except RadioError as exc: channel_error=str(exc)
   try: radio_name=read_device_name(dev);db.save_setting("device_name",radio_name)
   except RadioError as exc: name_error=str(exc)
- return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,tx_enabled=transmission["effective"],transmission=transmission,coverage_count=len(coverage),coverage_states=coverage_states,unsupported_coverage=unsupported,channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,radio_name=radio_name,cached_radio_name=cached_radio_name,name_error=name_error,timezones=valid_timezones(),timezone=app_timezone(db),nws_email=db.setting("nws_contact_email") or "",poll_seconds=cfg["poll_seconds"],nws_states=", ".join(cfg["states"]),admin_username=db.setting("auth_username") or "",web_tx_enabled=cfg["transmit_enabled"])
+ return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,tx_enabled=cfg["transmit_enabled"],coverage_count=len(coverage),coverage_states=coverage_states,unsupported_coverage=unsupported,channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,radio_name=radio_name,cached_radio_name=cached_radio_name,name_error=name_error,timezones=valid_timezones(),timezone=app_timezone(db),nws_email=db.setting("nws_contact_email") or "",poll_seconds=cfg["poll_seconds"],nws_states=", ".join(cfg["states"]),admin_username=db.setting("auth_username") or "",web_tx_enabled=cfg["transmit_enabled"])
 @bp.post("/settings/account")
 @admin
 def account_settings():
@@ -172,7 +163,7 @@ def nws_settings():
 @bp.post("/settings/transmission")
 @admin
 def transmission_settings():
- db=current_app.extensions["db"];enabled=request.form.get("transmit_enabled")=="yes";db.save_setting("transmit_enabled","true" if enabled else "false");db.audit(None,"transmission_setting_changed",session["user"],"enabled" if enabled else "disabled");flash("Transmission setting saved. Every message still requires manual approval and the environment emergency shutdown remains in effect.");return redirect(url_for("console.settings"))
+ db=current_app.extensions["db"];enabled=request.form.get("transmit_enabled")=="yes";db.save_setting("transmit_enabled","true" if enabled else "false");db.audit(None,"transmission_setting_changed",session["user"],"enabled" if enabled else "disabled");flash("Manual transmission setting saved. Every message still requires explicit approval and confirmation.");return redirect(url_for("console.settings"))
 @bp.route("/settings/coverage-counties",methods=["GET","POST"])
 @admin
 def coverage_counties_page():
@@ -268,7 +259,7 @@ def test_messaging():
   elif request.form.get("confirm")!="yes": flash("Test message not sent: confirmation required.")
   else:
    try:
-    verify_channel(dev,channel);detail=send(runtime_config(current_app.config,db),dev,channel,message);outcome="simulated" if current_app.config.get("dry_run") else "accepted";db.test_message(session["user"],channel,message,outcome,detail);flash(f"Test result: {outcome}. {detail}")
+    verify_channel(dev,channel);detail=send(runtime_config(current_app.config,db),dev,channel,message);db.test_message(session["user"],channel,message,"accepted",detail);flash(f"Test result: accepted. {detail}")
    except RadioError as exc: db.test_message(session["user"],channel or {"name":"none","index":-1},message,"failed",str(exc));flash(f"Test message failed: {status}. {exc}")
  return render_template("test_messaging.html",channel=channel,device_name=db.setting("device_name") or "unknown",status=status,cap=message_limit(current_app.config),history=db.test_history(),enabled=bool(channel and dev and transmissions_enabled(current_app.config,db)))
 @bp.route("/test-alerts",methods=["GET","POST"])

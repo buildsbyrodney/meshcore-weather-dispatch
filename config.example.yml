@@ -14,7 +14,4 @@ session_cookie_secure: false
 alert_types: ["Tornado Warning", "Severe Thunderstorm Warning", "Flash Flood Warning"]
 # Select a read-only discovered Companion channel in Settings after installation.
 max_message_bytes: 180
-# The web-managed transmission setting begins disabled; MESHCORE_SEND_ENABLED=0
-# is a separate emergency shutdown in the protected environment file.
-dry_run: true
 device: null

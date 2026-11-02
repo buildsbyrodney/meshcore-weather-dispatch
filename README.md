@@ -8,7 +8,7 @@ This is a Raspberry Pi OS Lite/Debian application for **human-approved** dispatc
 - The server atomically claims an alert before transmitting, preventing concurrent double sends.
 - Sending is rejected if an alert is canceled, superseded, expired, already acted on, or transmission is disabled.
 - Radio acceptance is recorded as `accepted`, not delivery: MeshCore does not prove over-the-air delivery to all recipients.
-- A newly installed instance has no selected device and `transmit_enabled: false`.
+- A newly installed instance has no selected device; manual transmissions are allowed only after a device/channel is selected and an operator explicitly confirms each send.
 - Device scans never select a device automatically. An administrator must select and test one.
 
 ## Quick start (development)
@@ -33,7 +33,7 @@ Initial HTTP is appropriate only on a trusted LAN: the installer sets `session_c
 2. Create a dedicated user: `sudo adduser --system --group --home /opt/meshcore-weather-dispatch weatherdispatch`.
 3. Copy this project to `/opt/meshcore-weather-dispatch`, create a virtual environment as that user, then install `pip install -e .`.
 4. Create durable state: `sudo install -d -o weatherdispatch -g weatherdispatch -m 750 /var/lib/meshcore-weather-dispatch`.
-5. Initialize protected service files and the first administrator account. This generates `WEATHER_DISPATCH_SECRET_KEY` exactly once (without printing it), stores it in a mode-600 environment file, seeds SQLite with the password hash and initial NWS settings, and starts with transmission disabled:
+5. Initialize protected service files and the first administrator account. This generates `WEATHER_DISPATCH_SECRET_KEY` exactly once (without printing it), stores it in a mode-600 environment file, and seeds SQLite with the password hash, initial NWS settings, and enabled manual-transmission permission:
 
 ```bash
 read -s -p 'Initial administrator password: ' WD_PASSWORD; echo
@@ -53,17 +53,17 @@ Do not put the password on a command line or commit either file. Re-running the 
 
 ### Bench-test a Companion without transmitting
 
-Leave `dry_run: true`, `transmit_enabled: false`, and `MESHCORE_SEND_ENABLED=0`. Connect the Companion, open **Settings**, select it manually, and use **Test selected connection**. In dry-run this verifies the chosen identity without opening the serial port; with `dry_run: false` it performs only the library's read-only `send_appstart` handshake. Settings can then read the existing Companion channels and lets the administrator select one by name; it never creates or changes a channel. Neither action sends a channel message. Do not change the two transmission interlocks until you have tested with an isolated/bench radio and confirmed the selected channel.
+Connect the Companion, open **Settings**, select it manually, and use **Test selected connection**. This performs only the library's read-only `send_appstart` handshake. Settings can then read the existing Companion channels and lets the administrator select one by name; it never creates or changes a channel. Neither action sends a channel message. Use an isolated/private bench channel before sending any manual test message.
 
 ## Configuration
 
 ### Configuration precedence and routine administration
 
-The installer-managed YAML file is deliberately limited to service settings: database path, host/port, secret environment-variable name, TLS cookie behavior, system time defaults, alert types, message cap, and `dry_run`. It contains no secret, administrator password, selected counties, NWS contact, states, or normal transmission switch.
+The installer-managed YAML file is deliberately limited to service settings: database path, host/port, secret environment-variable name, TLS cookie behavior, system time defaults, alert types, and message cap. It contains no secret, administrator password, selected counties, NWS contact, states, or manual transmission switch.
 
 SQLite is authoritative for the web-managed administrator account, NWS contact email (rendered into a fixed `MeshCoreWeatherDispatch/0.1 (email)` User-Agent), polling interval (never under 60 seconds), selected polling states, time zone, coverage catalog/counties, device/channel selections, and normal transmission enablement. Changes take effect on the next poll without a service restart. A legacy YAML installation seeds any missing SQLite values once and never overwrites later web changes.
 
-The environment file is intentionally not a web setting. `WEATHER_DISPATCH_SECRET_KEY` signs sessions and confirmations; it is generated once, mode 600, never rendered or logged, and must be retained across upgrades. `MESHCORE_SEND_ENABLED=0` is an independent emergency shutdown. Even if an administrator enables normal manual transmission in Settings, every send still requires manual confirmation and cannot proceed while that environment value is `0` (or while `dry_run: true`).
+The environment file is intentionally not a web setting. `WEATHER_DISPATCH_SECRET_KEY` signs sessions and confirmations; it is generated once, mode 600, never rendered or logged, and must be retained across upgrades. Manual-transmission permission is managed and audited in Settings; every send still requires an authenticated operator, a signed preview, an explicit confirmation, a verified Companion, and a verified selected channel.
 
 Use **Settings** for daily administration: change the administrator username/password (with current-password verification), set NWS contact/states/interval, select time zone, manage Coverage Counties, and set normal manual transmission permission. Removing a state that contains selected counties requires explicit confirmation and preserves those county records; they simply are not monitored until that state is restored. Empty county selection remains fail-closed and never means nationwide monitoring.
 
@@ -77,7 +77,7 @@ Selected states now live in Settings. Legacy `counties` accepts NWS SAME six-dig
 
 ### Test Alerts
 
-**Test Alerts** creates one local, synthetic CAP warning for exercising the same geographic filtering, byte shortening, audit history, and manual dispatch controls used by the NWS feed. It never contacts NWS, opens the Companion, or transmits by itself. Every generated alert, dashboard card, shortened message, and audit entry—including later send, ignore, expiration, revision, or cancellation events—is marked **TEST ONLY**. Sending or ignoring it remains a separate operator decision, subject to the normal radio and environment interlocks. Synthetic and genuine CAP revision families are kept separate even if a submitted reference names a real alert.
+**Test Alerts** creates one local, synthetic CAP warning for exercising the same geographic filtering, byte shortening, audit history, and manual dispatch controls used by the NWS feed. It never contacts NWS, opens the Companion, or transmits by itself. Every generated alert, dashboard card, shortened message, and audit entry—including later send, ignore, expiration, revision, or cancellation events—is marked **TEST ONLY**. Sending or ignoring it remains a separate operator decision requiring the normal authenticated preview and explicit confirmation. Synthetic and genuine CAP revision families are kept separate even if a submitted reference names a real alert.
 
 The checkbox list is populated only from SQLite-selected Coverage Counties. Legacy YAML county entries are accepted once during an upgrade migration, then retained only in SQLite; new installations never need county YAML.
 
@@ -103,13 +103,13 @@ sudo systemctl start meshcore-weather-dispatch
 sudo systemctl status meshcore-weather-dispatch --no-pager
 ```
 
-Before starting, optionally back up all durable state: `sudo cp -a /etc/meshcore-weather-dispatch/config.yml /etc/meshcore-weather-dispatch/config.yml.backup`, `sudo cp -a /etc/meshcore-weather-dispatch/environment /etc/meshcore-weather-dispatch/environment.backup`, and `sudo cp -a /var/lib/meshcore-weather-dispatch/dispatch.sqlite3 /var/lib/meshcore-weather-dispatch/dispatch.sqlite3.backup`. Keep the environment file unchanged, especially `WEATHER_DISPATCH_SECRET_KEY` and `MESHCORE_SEND_ENABLED=0`; do not rerun the initializer during an ordinary upgrade and do not replace the config with the example. After the upgrade, sign in and use Settings for time zone, NWS, account, transmission, and Coverage Counties changes.
+Before starting, optionally back up all durable state: `sudo cp -a /etc/meshcore-weather-dispatch/config.yml /etc/meshcore-weather-dispatch/config.yml.backup`, `sudo cp -a /etc/meshcore-weather-dispatch/environment /etc/meshcore-weather-dispatch/environment.backup`, and `sudo cp -a /var/lib/meshcore-weather-dispatch/dispatch.sqlite3 /var/lib/meshcore-weather-dispatch/dispatch.sqlite3.backup`. Keep the environment file unchanged, especially `WEATHER_DISPATCH_SECRET_KEY`; do not rerun the initializer during an ordinary upgrade and do not replace the config with the example. After the upgrade, sign in and use Settings for time zone, NWS, account, manual transmission, and Coverage Counties changes.
 
 ### USB Companion setup
 
 Open Settings as an administrator and choose **Detect devices**. The scan reads `/dev/serial/by-id` and serial descriptors; it does not open or change any device. Pick a result and test it. On success, the application stores both the selected stable `/dev/serial/by-id/...` path and USB identity (VID, PID, serial number). At reconnect it resolves the by-id path first, then only a unique matching USB identity. Zero matches means disconnected; multiple matches means ambiguous. It will never guess and select a different radio. Remove or change the device in Settings without stopping NWS polling.
 
-`dispatch/meshcore_adapter.py` uses the official [`meshcore`](https://github.com/meshcore-dev/meshcore_py) Python library’s serial transport and `send_chan_msg(channel_index, message)` command. It requires both `MESHCORE_SEND_ENABLED=1` and `transmit_enabled: true`; dry-run prevents all message sends but still permits read-only device/channel queries. The application never creates or changes channels except through the separately confirmed Manage Channels action. Verify the exact library/firmware pairing on a bench radio before enabling production transmissions.
+`dispatch/meshcore_adapter.py` uses the official [`meshcore`](https://github.com/meshcore-dev/meshcore_py) Python library’s serial transport and `send_chan_msg(channel_index, message)` command. It requires the Settings-managed manual-transmission permission, a verified Companion, and a verified selected channel. The application never creates or changes channels except through the separately confirmed Manage Channels action. Verify the exact library/firmware pairing on a bench radio before using manual transmissions.
 
 ### Channel and time-zone settings
 

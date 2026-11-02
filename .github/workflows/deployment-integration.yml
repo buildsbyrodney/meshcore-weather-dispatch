@@ -36,7 +36,7 @@ jobs:
           ! sudo ss -ltn | grep -qE '0\.0\.0\.0:8080|\[::\]:8080'
           sudo test -d /opt/meshcore-weather-dispatch/.git
           sudo -u weatherdispatch git -C /opt/meshcore-weather-dispatch remote get-url origin | grep -q /tmp/meshcore-origin.git
-          sudo grep -q '^MESHCORE_SEND_ENABLED=0$' /etc/meshcore-weather-dispatch/environment
+          ! sudo grep -q '^MESHCORE_SEND_ENABLED=' /etc/meshcore-weather-dispatch/environment
       - name: Exercise authenticated proxy workflow
         run: |
           base=http://127.0.0.1
@@ -84,7 +84,7 @@ jobs:
           from dispatch.db import Database
           db=Database('/var/lib/meshcore-weather-dispatch/dispatch.sqlite3')
           assert db.credentials()[0]=='ciadmin' and db.coverage() and db.setting('tx_channel')
-          assert db.setting('transmit_enabled')=='false'
+          assert db.setting('transmit_enabled')=='true'
           PY
       - name: Simulated invalid proxy upgrade rolls back
         env:

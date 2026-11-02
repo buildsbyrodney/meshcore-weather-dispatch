@@ -16,7 +16,7 @@ def radio_message(feature: dict, timezone_name="UTC") -> str:
     event = props.get("event", "Weather alert").upper();areas=" ".join(str(props.get("areaDesc") or "configured area").split())
     prefix="TEST ONLY " if props.get("test_only") else ""
     text=f"{prefix}{event}: {areas}. Expires {local_time(props.get('expires'),timezone_name)}."
-    headline=" ".join(str(props.get("headline") or "").split())
+    headline="" if props.get("test_only") else " ".join(str(props.get("headline") or "").split())
     return text+(f" {headline}" if headline and headline.casefold() not in text.casefold() else "")
 
 def append_comment(base: str, comment: str, byte_cap: int) -> str:
