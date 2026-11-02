@@ -16,3 +16,5 @@ def test_install_and_update_scripts_keep_port_80_and_existing_sites_safe():
     assert "nginx -t" in install and "curl --fail" in install
     assert "nginx -t" in update and "pull --ff-only" in update and "UPDATE_BRANCH" in update
     assert "sqlite3.connect" in update and "rollback(){" in update and "pip-freeze.txt" in update
+    assert "Recognized legacy Weather Dispatch unit" in update and "Service unit is unknown or customized" in update
+    assert "Port 80 is occupied; cannot safely add Nginx" in update

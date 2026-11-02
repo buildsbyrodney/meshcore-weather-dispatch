@@ -5,8 +5,15 @@ APP=/opt/meshcore-weather-dispatch; ETC=/etc/meshcore-weather-dispatch; STATE=/v
 UPDATE_BRANCH=${UPDATE_BRANCH:-main}
 [[ -d "$APP/.git" ]] || { echo 'Not an updateable Git checkout; refusing update.' >&2; exit 1; }
 runuser -u weatherdispatch -- git -C "$APP" remote get-url origin >/dev/null; runuser -u weatherdispatch -- git -C "$APP" diff --quiet || { echo 'Local application edits detected; refusing update.' >&2; exit 1; }
-grep -q 'Managed by MeshCore Weather Dispatch' /etc/systemd/system/meshcore-weather-dispatch.service || { echo 'Service file is customized; use a systemd .d override and update it manually.' >&2; exit 1; }
-[[ ! -f /etc/nginx/sites-available/meshcore-weather-dispatch ]] || grep -q 'Managed by MeshCore Weather Dispatch' /etc/nginx/sites-available/meshcore-weather-dispatch || { echo 'Nginx site is customized; refusing overwrite.' >&2; exit 1; }
+UNIT=/etc/systemd/system/meshcore-weather-dispatch.service
+if grep -q 'Managed by MeshCore Weather Dispatch' "$UNIT"; then :
+elif grep -q '^Description=MeshCore Weather Dispatch (manual NWS alert console)$' "$UNIT" && grep -q "gunicorn --workers 1 --bind 127.0.0.1:8080 'dispatch:create_app()'" "$UNIT" && grep -q '^User=weatherdispatch$' "$UNIT" && grep -q '^Environment=WEATHER_DISPATCH_CONFIG=/etc/meshcore-weather-dispatch/config.yml$' "$UNIT"; then echo 'Recognized legacy Weather Dispatch unit; migrating it to the managed unit.'
+else echo 'Service unit is unknown or customized; refusing overwrite. Preserve custom changes in a .d override.' >&2; exit 1; fi
+if command -v nginx >/dev/null; then
+ [[ ! -f /etc/nginx/sites-available/meshcore-weather-dispatch ]] || grep -q 'Managed by MeshCore Weather Dispatch' /etc/nginx/sites-available/meshcore-weather-dispatch || { echo 'Nginx site is customized; refusing overwrite.' >&2; exit 1; }
+else
+ ss -ltnH '( sport = :80 )' | grep -q . && { echo 'Port 80 is occupied; cannot safely add Nginx. Existing service was left running.' >&2; exit 1; }
+fi
 runuser -u weatherdispatch -- git -C "$APP" fetch --prune origin; OLD=$(runuser -u weatherdispatch -- git -C "$APP" rev-parse HEAD)
 install -d -m 700 "$BACKUP" "$BACKUP/etc" "$BACKUP/systemd" "$BACKUP/nginx"
 [[ -f "$DB" ]] && python3 - "$DB" "$BACKUP/dispatch.sqlite3" <<'PY'
@@ -20,6 +27,7 @@ cp -a /etc/systemd/system/meshcore-weather-dispatch.service "$BACKUP/systemd/ser
 runuser -u weatherdispatch -- sh -c 'cd "$1" && .venv/bin/pip freeze' sh "$APP" > "$BACKUP/pip-freeze.txt"
 rollback(){ echo "Update failed; restoring $OLD. Backups: $BACKUP" >&2; runuser -u weatherdispatch -- git -C "$APP" checkout -q "$OLD" || true; cp -a "$BACKUP/systemd/service" /etc/systemd/system/meshcore-weather-dispatch.service; [[ -f "$BACKUP/nginx/site" ]] && cp -a "$BACKUP/nginx/site" /etc/nginx/sites-available/meshcore-weather-dispatch; runuser -u weatherdispatch -- sh -c 'cd "$1" && .venv/bin/pip install -r "$2" && .venv/bin/pip install -e .' sh "$APP" "$BACKUP/pip-freeze.txt" || echo 'Python dependency rollback needs manual recovery; see pip-freeze.txt.' >&2; systemctl daemon-reload; nginx -t && systemctl reload nginx || true; systemctl start meshcore-weather-dispatch || true; }
 trap rollback ERR
+if ! command -v nginx >/dev/null; then apt-get update; apt-get install -y nginx; if [[ -e /etc/nginx/sites-enabled/default ]]; then target=$(readlink -f /etc/nginx/sites-enabled/default || true); [[ "$target" == /etc/nginx/sites-available/default ]] && grep -q 'Default server configuration' "$target" || { echo 'Existing Nginx site found; migration refused.' >&2; exit 1; }; rm /etc/nginx/sites-enabled/default; fi; fi
 systemctl stop meshcore-weather-dispatch
 runuser -u weatherdispatch -- git -C "$APP" checkout "$UPDATE_BRANCH"; runuser -u weatherdispatch -- git -C "$APP" pull --ff-only origin "$UPDATE_BRANCH"
 runuser -u weatherdispatch -- sh -c 'cd "$1" && .venv/bin/pip install --upgrade -e .' sh "$APP"
