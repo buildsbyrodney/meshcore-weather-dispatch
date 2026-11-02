@@ -157,3 +157,42 @@ def test_test_message_confirmation_checkbox_stays_inline_on_desktop_and_mobile(t
                 browser.close()
     finally:
         server.shutdown();thread.join(timeout=5)
+
+
+def test_channel_and_other_checkbox_controls_stay_inline_on_desktop_and_mobile(tmp_path,monkeypatch):
+    """All remaining plain checkbox labels use the shared inline layout."""
+    if not find_library("nspr4"):
+        pytest.skip("Chromium runtime libraries are unavailable in this local environment")
+    app=create_app(browser_config(tmp_path));db=app.extensions["db"]
+    db.replace_catalog([{"ugc":"ALC089","state":"AL","name":"Madison","same":"001089"}],{"source":"browser test"})
+    db.save_coverage(["ALC089"], {"AL", "TN"})
+    monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/fake"},"Connected"))
+    monkeypatch.setattr("dispatch.routes.discover_channels",lambda dev:{"capacity":4,"slots":[{"index":0,"name":"Public","state":"occupied"},{"index":1,"name":"","state":"empty"}]})
+    monkeypatch.setattr("dispatch.routes.read_device_name",lambda dev:"WXALERT")
+    server=make_server("127.0.0.1",0,app);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser=playwright.chromium.launch()
+            try:
+                for width in (1280,375):
+                    context=browser.new_context(viewport={"width":width,"height":667});page=context.new_page()
+                    page.goto(f"http://127.0.0.1:{server.server_port}/login")
+                    page.fill('input[name="username"]',"admin");page.fill('input[name="password"]',"browser-password");page.click('button:has-text("Sign in")')
+                    page.goto(f"http://127.0.0.1:{server.server_port}/settings")
+                    channel_check=page.locator('.add-channel .inline-check input[name="confirm"]').bounding_box()
+                    channel_text=page.locator('.add-channel .inline-check span').bounding_box()
+                    assert channel_check and channel_text and channel_check["x"] < channel_text["x"]
+                    assert abs((channel_check["y"]+channel_check["height"]/2)-(channel_text["y"]+channel_text["height"]/2)) < 2
+                    page.goto(f"http://127.0.0.1:{server.server_port}/settings/coverage-counties")
+                    coverage_check=page.locator('.confirm-expand.inline-check input').bounding_box()
+                    coverage_text=page.locator('.confirm-expand.inline-check span').bounding_box()
+                    assert coverage_check and coverage_text and coverage_check["x"] < coverage_text["x"]
+                    page.goto(f"http://127.0.0.1:{server.server_port}/test-alerts")
+                    county_check=page.locator('.county-choice.inline-check input').bounding_box()
+                    county_text=page.locator('.county-choice.inline-check span').bounding_box()
+                    assert county_check and county_text and county_check["x"] < county_text["x"]
+                    context.close()
+            finally:
+                browser.close()
+    finally:
+        server.shutdown();thread.join(timeout=5)
