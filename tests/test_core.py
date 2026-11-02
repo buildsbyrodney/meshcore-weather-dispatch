@@ -620,3 +620,26 @@ def test_catalog_refresh_preserves_selected_coverage(tmp_path,monkeypatch):
  token=client.get("/settings/coverage-counties").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
  client.post("/settings/coverage-counties",data={"csrf_token":token,"action":"import"})
  assert [row["ugc"] for row in db.coverage()]==["ALC089"] and db.catalog_meta()["version"]=="v2"
+
+def test_transmission_setting_is_audited_and_never_opens_radio(tmp_path,monkeypatch):
+ app=create_app(config(tmp_path));client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ monkeypatch.setattr("dispatch.routes.send",lambda *args: (_ for _ in ()).throw(AssertionError("settings must not send")))
+ client.post("/settings/transmission",data={"csrf_token":csrf_token(client),"transmit_enabled":"yes"})
+ assert app.extensions["db"].setting("transmit_enabled")=="true"
+ assert app.extensions["db"].history()[0]["action"]=="transmission_setting_changed"
+
+def test_route_rechecks_transmission_interlocks_after_signed_preview(tmp_path,monkeypatch):
+ cfg=config(tmp_path);cfg["dry_run"]=False;app=create_app(cfg);ingest(app,[feature()]);db=app.extensions["db"];client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ db.save_setting("tx_channel",'{"index":1,"name":"#bench"}');db.save_setting("transmit_enabled","true")
+ monkeypatch.setenv("MESHCORE_SEND_ENABLED","1")
+ monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/fake"},"Connected"));monkeypatch.setattr("dispatch.routes.verify_channel",lambda *args:None)
+ opened=[]
+ async def opened_send(*args): opened.append(args);return "accepted"
+ monkeypatch.setattr("dispatch.meshcore_adapter._send_serial",opened_send)
+ token=csrf_token(client);preview=alert_preview(client,"new",token).get_json()
+ db.save_setting("transmit_enabled","false")
+ client.post("/alerts/new/send",data={"csrf_token":token,"confirm":"yes","comment":"","preview_token":preview["token"]})
+ assert not opened and db.get("new")["status"]=="failed"
+ assert db.history()[0]["action"]=="failed"
