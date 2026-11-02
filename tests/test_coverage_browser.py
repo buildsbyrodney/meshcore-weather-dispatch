@@ -131,3 +131,29 @@ def test_manual_transmission_setting_stays_compact_on_mobile(tmp_path):
                 browser.close()
     finally:
         server.shutdown();thread.join(timeout=5)
+
+
+def test_test_message_confirmation_checkbox_stays_inline_on_desktop_and_mobile(tmp_path):
+    """The test-message confirmation uses the shared inline checkbox layout."""
+    if not find_library("nspr4"):
+        pytest.skip("Chromium runtime libraries are unavailable in this local environment")
+    app=create_app(browser_config(tmp_path))
+    server=make_server("127.0.0.1",0,app);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser=playwright.chromium.launch()
+            try:
+                for width in (1280,375):
+                    context=browser.new_context(viewport={"width":width,"height":667});page=context.new_page()
+                    page.goto(f"http://127.0.0.1:{server.server_port}/login")
+                    page.fill('input[name="username"]',"admin");page.fill('input[name="password"]',"browser-password");page.click('button:has-text("Sign in")')
+                    page.goto(f"http://127.0.0.1:{server.server_port}/test-messaging")
+                    checkbox=page.locator('.inline-check input[name="confirm"]').bounding_box()
+                    wording=page.locator('.inline-check span').bounding_box()
+                    assert checkbox and wording and checkbox["x"] < wording["x"]
+                    assert abs((checkbox["y"]+checkbox["height"]/2)-(wording["y"]+wording["height"]/2)) < 2
+                    context.close()
+            finally:
+                browser.close()
+    finally:
+        server.shutdown();thread.join(timeout=5)
