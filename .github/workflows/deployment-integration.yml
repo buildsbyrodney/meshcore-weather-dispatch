@@ -39,7 +39,8 @@ jobs:
           fi
           grep -q 'detected dubious ownership' /tmp/dubious.out
           sudo rm -rf /tmp/root-owned-weather-dispatch
-          printf 'ciadmin\nci@example.invalid\nAL\nci-password-long-enough\n' | sudo -E bash "$GITHUB_WORKSPACE/scripts/install.sh"
+          # Exercise too-short and mismatched passwords before a successful confirmation.
+          printf 'ciadmin\nci@example.invalid\nAL\nshort\nshort\nsimple\ndifferent\nci-password-long-enough\nci-password-long-enough\n' | sudo -E bash "$GITHUB_WORKSPACE/scripts/install.sh"
           sudo systemctl is-active --quiet nginx meshcore-weather-dispatch
           sudo ss -ltn | grep -q '127.0.0.1:8080'
           ! sudo ss -ltn | grep -qE '0\.0\.0\.0:8080|\[::\]:8080'

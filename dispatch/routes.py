@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from functools import wraps
 from flask import Blueprint, current_app, flash, redirect, render_template, request, session, url_for, jsonify
 from werkzeug.security import check_password_hash, generate_password_hash
+from .auth import validate_password
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from .devices import scan_devices, resolve_device
 from .messages import append_comment, radio_message, MessageError
@@ -141,7 +142,7 @@ def account_settings():
   values={}
   if requested and requested!=username: values["auth_username"]=requested
   if new_password:
-   if len(new_password)<12: raise ValueError("new password must be at least 12 characters")
+   validate_password(new_password,"new password")
    if new_password!=confirm: raise ValueError("new password confirmation does not match")
    values["auth_password_hash"]=generate_password_hash(new_password)
   if not values: raise ValueError("enter a new username or password")

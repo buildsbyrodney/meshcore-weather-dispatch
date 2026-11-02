@@ -4,6 +4,7 @@ import argparse, os, secrets, sys
 from pathlib import Path
 import yaml
 from werkzeug.security import generate_password_hash
+from .auth import validate_password
 from .db import Database
 from .runtime import contact_email, states
 
@@ -14,7 +15,7 @@ def _write_private(path: Path, text: str):
 
 def initialize(config_path, environment_path, database, username, password, email, selected_states):
     if len(username)<3 or len(username)>64 or not username.replace("_","").replace("-","").isalnum(): raise ValueError("username must be 3–64 letters, digits, hyphens, or underscores")
-    if len(password)<12: raise ValueError("password must be at least 12 characters")
+    validate_password(password)
     email=contact_email(email);selected_states=states(selected_states)
     config_path,environment_path,database=Path(config_path),Path(environment_path),Path(database)
     if not config_path.exists():

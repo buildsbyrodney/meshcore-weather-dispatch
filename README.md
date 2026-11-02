@@ -33,7 +33,7 @@ cd meshcore-weather-dispatch
 sudo ./scripts/install.sh
 ```
 
-The installer prompts for an administrator username, NWS contact email, polling state codes such as `AL,TN`, and an initial password. It prints the trusted-LAN URL when the service responds, normally `http://<Pi-IP>/`.
+The installer prompts for an administrator username, NWS contact email, polling state codes such as `AL,TN`, and an initial password twice. Administrator passwords require at least six characters; no character-type or periodic-change policy applies. It prints the trusted-LAN URL when the service responds, normally `http://<Pi-IP>/`.
 
 If power, networking, or a package operation interrupts the first install after the application checkout is created, rerunning the installer stops safely rather than reusing it. First confirm that no initial state was created, then remove only the incomplete application checkout and rerun from the source checkout:
 

@@ -19,6 +19,9 @@ def test_install_and_update_scripts_keep_port_80_and_existing_sites_safe():
     assert "runuser -u weatherdispatch -- sh -c 'cd /tmp && exec git clone" in install
     assert "safe.directory" not in install
     assert "An incomplete initial installation was found" in install
+    assert "Confirm initial administrator password" in install
+    assert "Passwords did not match. Please try again." in install
+    assert "at least 6 characters" in install
     assert "nginx -t" in install and "curl --fail" in install
     assert "nginx -t" in update and "pull --ff-only" in update and "UPDATE_BRANCH" in update
     assert "sqlite3.connect" in update and "rollback(){" in update and "pip-freeze.txt" in update

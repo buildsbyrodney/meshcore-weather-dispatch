@@ -38,8 +38,15 @@ install -d -o weatherdispatch -g weatherdispatch -m 750 "$APP" "$ETC" "$STATE"
 runuser -u weatherdispatch -- sh -c 'cd /tmp && exec git clone --branch "$1" --single-branch "$2" "$3"' sh "$APP_BRANCH" "$REPO_URL" "$APP"
 runuser -u weatherdispatch -- sh -c 'cd /tmp && exec git -C "$1" remote get-url origin' sh "$APP" >/dev/null
 runuser -u weatherdispatch -- sh -c 'cd "$1" && python3 -m venv .venv && .venv/bin/pip install --upgrade -e .' sh "$APP"
-read -rp 'Administrator username [weatheradmin]: ' USER; USER=${USER:-weatheradmin}; read -rp 'NWS contact email: ' EMAIL; read -rp 'NWS states (e.g. AL,TN): ' STATES; read -rsp 'Initial administrator password: ' PASS; echo
-printf '%s\n' "$PASS" | "$APP/.venv/bin/python" -m dispatch.bootstrap --config "$ETC/config.yml" --environment "$ETC/environment" --database "$STATE/dispatch.sqlite3" --username "$USER" --email "$EMAIL" --states "$STATES" --password-stdin; unset PASS
+read -rp 'Administrator username [weatheradmin]: ' USER; USER=${USER:-weatheradmin}; read -rp 'NWS contact email: ' EMAIL; read -rp 'NWS states (e.g. AL,TN): ' STATES
+while :; do
+ read -rsp 'Initial administrator password (at least 6 characters): ' PASS; echo
+ read -rsp 'Confirm initial administrator password: ' CONFIRM; echo
+ if [[ "$PASS" != "$CONFIRM" ]]; then echo 'Passwords did not match. Please try again.' >&2; unset PASS CONFIRM; continue; fi
+ if (( ${#PASS} < 6 )); then echo 'Password must be at least 6 characters. Please try again.' >&2; unset PASS CONFIRM; continue; fi
+ break
+done
+printf '%s\n' "$PASS" | "$APP/.venv/bin/python" -m dispatch.bootstrap --config "$ETC/config.yml" --environment "$ETC/environment" --database "$STATE/dispatch.sqlite3" --username "$USER" --email "$EMAIL" --states "$STATES" --password-stdin; unset PASS CONFIRM
 chown weatherdispatch:weatherdispatch "$ETC/config.yml" "$ETC/environment" "$STATE/dispatch.sqlite3"
 install -m 644 "$APP/systemd/meshcore-weather-dispatch.service" /etc/systemd/system/meshcore-weather-dispatch.service; install -m 644 "$APP/nginx/meshcore-weather-dispatch.conf" /etc/nginx/sites-available/meshcore-weather-dispatch; ln -s /etc/nginx/sites-available/meshcore-weather-dispatch /etc/nginx/sites-enabled/meshcore-weather-dispatch
 nginx -t; systemctl daemon-reload; systemctl enable --now nginx meshcore-weather-dispatch
