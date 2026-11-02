@@ -21,7 +21,7 @@ export WEATHER_DISPATCH_CONFIG=$PWD/config.yml
 python -m dispatch
 ```
 
-Log in using the password hash in `config.yml` (generate it with `python -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('choose-a-password'))"`). Use a long random `secret_key` and set `WEATHER_DISPATCH_SECRET_KEY` instead of storing it in the file.
+For development only, provide a password hash and states in local test configuration. Production initialization below creates these safely without placing credentials in YAML.
 
 ## Install on Raspberry Pi OS Lite / Debian
 
@@ -29,8 +29,20 @@ Log in using the password hash in `config.yml` (generate it with `python -c "fro
 2. Create a dedicated user: `sudo adduser --system --group --home /opt/meshcore-weather-dispatch weatherdispatch`.
 3. Copy this project to `/opt/meshcore-weather-dispatch`, create a virtual environment as that user, then install `pip install -e .`.
 4. Create durable state: `sudo install -d -o weatherdispatch -g weatherdispatch -m 750 /var/lib/meshcore-weather-dispatch`.
-5. Copy `config.example.yml` to `/etc/meshcore-weather-dispatch/config.yml`; make it readable only by the service account: `sudo install -o weatherdispatch -g weatherdispatch -m 600 config.example.yml /etc/meshcore-weather-dispatch/config.yml`. Replace the password-hash placeholder and use an NWS User-Agent with a monitored contact address.
-6. Generate a session secret with `openssl rand -hex 32`; put `WEATHER_DISPATCH_SECRET_KEY=...` and `MESHCORE_SEND_ENABLED=0` in `/etc/meshcore-weather-dispatch/environment` (mode `600`). Do not commit that file.
+5. Initialize protected service files and the first administrator account. This generates `WEATHER_DISPATCH_SECRET_KEY` exactly once (without printing it), stores it in a mode-600 environment file, seeds SQLite with the password hash and initial NWS settings, and starts with transmission disabled:
+
+```bash
+read -s -p 'Initial administrator password: ' WD_PASSWORD; echo
+printf '%s\n' "$WD_PASSWORD" | sudo /opt/meshcore-weather-dispatch/.venv/bin/python -m dispatch.bootstrap \
+  --config /etc/meshcore-weather-dispatch/config.yml \
+  --environment /etc/meshcore-weather-dispatch/environment \
+  --database /var/lib/meshcore-weather-dispatch/dispatch.sqlite3 \
+  --username weatheradmin --email you@example.org --states AL --password-stdin
+unset WD_PASSWORD
+sudo chown weatherdispatch:weatherdispatch /etc/meshcore-weather-dispatch/config.yml /etc/meshcore-weather-dispatch/environment /var/lib/meshcore-weather-dispatch/dispatch.sqlite3
+```
+
+Do not put the password on a command line or commit either file. Re-running the initializer preserves the existing secret, configuration file, and SQLite data; it can deliberately reset the administrator password only when given a new password.
 7. Install `systemd/meshcore-weather-dispatch.service`, adjust paths if needed, then `sudo systemctl daemon-reload && sudo systemctl enable --now meshcore-weather-dispatch`. The supplied unit intentionally uses one Gunicorn worker, which owns the NWS polling thread. Check `sudo systemctl status meshcore-weather-dispatch` and `sudo journalctl -u meshcore-weather-dispatch -f`.
 8. Put the app behind an HTTPS reverse proxy and restrict it to your LAN/VPN. Keep `session_cookie_secure: true` for HTTPS; use `false` only during a short local HTTP setup session.
 9. Allow the service account to open the Companion serial device, then restart the service: `sudo usermod -aG dialout weatherdispatch && sudo systemctl restart meshcore-weather-dispatch`.
@@ -41,19 +53,29 @@ Leave `dry_run: true`, `transmit_enabled: false`, and `MESHCORE_SEND_ENABLED=0`.
 
 ## Configuration
 
+### Configuration precedence and routine administration
+
+The installer-managed YAML file is deliberately limited to service settings: database path, host/port, secret environment-variable name, TLS cookie behavior, system time defaults, alert types, message cap, and `dry_run`. It contains no secret, administrator password, selected counties, NWS contact, states, or normal transmission switch.
+
+SQLite is authoritative for the web-managed administrator account, NWS contact email (rendered into a fixed `MeshCoreWeatherDispatch/0.1 (email)` User-Agent), polling interval (never under 60 seconds), selected polling states, time zone, coverage catalog/counties, device/channel selections, and normal transmission enablement. Changes take effect on the next poll without a service restart. A legacy YAML installation seeds any missing SQLite values once and never overwrites later web changes.
+
+The environment file is intentionally not a web setting. `WEATHER_DISPATCH_SECRET_KEY` signs sessions and confirmations; it is generated once, mode 600, never rendered or logged, and must be retained across upgrades. `MESHCORE_SEND_ENABLED=0` is an independent emergency shutdown. Even if an administrator enables normal manual transmission in Settings, every send still requires manual confirmation and cannot proceed while that environment value is `0` (or while `dry_run: true`).
+
+Use **Settings** for daily administration: change the administrator username/password (with current-password verification), set NWS contact/states/interval, select time zone, manage Coverage Counties, and set normal manual transmission permission. Removing a state that contains selected counties requires explicit confirmation and preserves those county records; they simply are not monitored until that state is restored. Empty county selection remains fail-closed and never means nationwide monitoring.
+
 ### Coverage Counties
 
 Use **Settings → Manage Coverage Counties** to import the official NWS county-zone catalog from `api.weather.gov/zones?type=county`. The importer accepts only county (`C`) UGC entries, derives SAME as `0` plus the official state FIPS and county FIPS suffix, and records the source URL, retrieval time, and ETag/Last-Modified value when NWS provides one. The catalog and selected counties are stored separately in SQLite for offline use. A failed or invalid import leaves both the prior catalog and coverage selection unchanged.
 
 The durable SQLite selection takes precedence over `config.yml` after first start. Existing `config.yml` county entries are migrated once, de-duplicated, into that selection; `config.yml` remains only the migration seed thereafter. Back up `dispatch.sqlite3` before upgrades. An empty selection is fail-closed and matches no county alerts—it never enables nationwide monitoring. Saving more than 25 counties requires an explicit confirmation. Changes take effect on the next poll and immediately in Test Alerts; no service restart is required.
 
-`states` accepts NWS two-letter state codes. Legacy `counties` accepts NWS SAME six-digit codes (for example `001089`; shorter numeric input is normalized), UGC county codes (for example `ALC089`), or an NWS URL ending in either code and is migrated once to durable coverage selection. The filter checks the NWS JSON `geocode.SAME` and `geocode.UGC` values; it intentionally does not inspect polygons, so missing geometry is safe. An alert affecting several counties matches when any configured county matches. `alert_types` is an allowlist. Select exactly one existing regional transmit channel by name in Settings; the application records its radio slot but never changes the radio configuration.
+Selected states now live in Settings. Legacy `counties` accepts NWS SAME six-digit codes (for example `001089`; shorter numeric input is normalized), UGC county codes (for example `ALC089`), or an NWS URL ending in either code and is migrated once to durable coverage selection. The filter checks the NWS JSON `geocode.SAME` and `geocode.UGC` values; it intentionally does not inspect polygons, so missing geometry is safe. An alert affecting several counties matches when any configured county matches. `alert_types` is an installer-managed allowlist. Select exactly one existing regional transmit channel by name in Settings; the application records its radio slot but never changes the radio configuration.
 
 ### Test Alerts
 
 **Test Alerts** creates one local, synthetic CAP warning for exercising the same geographic filtering, byte shortening, audit history, and manual dispatch controls used by the NWS feed. It never contacts NWS, opens the Companion, or transmits by itself. Every generated alert, dashboard card, shortened message, and audit entry—including later send, ignore, expiration, revision, or cancellation events—is marked **TEST ONLY**. Sending or ignoring it remains a separate operator decision, subject to the normal radio and environment interlocks. Synthetic and genuine CAP revision families are kept separate even if a submitted reference names a real alert.
 
-The checkbox list is populated only from configured `counties`. Strings are shown as their configured SAME or UGC identifier. For readable county names and paired identifiers, use structured entries; several states may be represented together:
+The checkbox list is populated only from SQLite-selected Coverage Counties. Legacy YAML entries are migration-only and are not required for new installations.
 
 ```yaml
 states: [AL, TN]
@@ -88,7 +110,7 @@ sudo systemctl start meshcore-weather-dispatch
 sudo systemctl status meshcore-weather-dispatch --no-pager
 ```
 
-Before starting, optionally make a separate backup of the only two local state files: `sudo cp -a /etc/meshcore-weather-dispatch/config.yml /etc/meshcore-weather-dispatch/config.yml.backup` and `sudo cp -a /var/lib/meshcore-weather-dispatch/dispatch.sqlite3 /var/lib/meshcore-weather-dispatch/dispatch.sqlite3.backup`. Keep the existing environment file unchanged, especially `MESHCORE_SEND_ENABLED=0`. For this release, add `timezone: America/Chicago` (or the local IANA timezone) with `sudoedit /etc/meshcore-weather-dispatch/config.yml`; do not replace the file with the example configuration.
+Before starting, optionally back up all durable state: `sudo cp -a /etc/meshcore-weather-dispatch/config.yml /etc/meshcore-weather-dispatch/config.yml.backup`, `sudo cp -a /etc/meshcore-weather-dispatch/environment /etc/meshcore-weather-dispatch/environment.backup`, and `sudo cp -a /var/lib/meshcore-weather-dispatch/dispatch.sqlite3 /var/lib/meshcore-weather-dispatch/dispatch.sqlite3.backup`. Keep the environment file unchanged, especially `WEATHER_DISPATCH_SECRET_KEY` and `MESHCORE_SEND_ENABLED=0`; do not rerun the initializer during an ordinary upgrade and do not replace the config with the example. After the upgrade, sign in and use Settings for time zone, NWS, account, transmission, and Coverage Counties changes.
 
 ### USB Companion setup
 

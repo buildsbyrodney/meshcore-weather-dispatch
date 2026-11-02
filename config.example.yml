@@ -2,26 +2,19 @@ database: /var/lib/meshcore-weather-dispatch/dispatch.sqlite3
 host: 127.0.0.1
 port: 8080
 secret_key_env: WEATHER_DISPATCH_SECRET_KEY
-admin_username: admin
-admin_password_hash: "REPLACE_WITH_WERKZEUG_HASH"
-nws_user_agent: "MeshCoreWeatherDispatch/0.1 admin@example.invalid"
+# Administrator, NWS contact, polling states/interval, coverage counties, and
+# normal transmission enablement are initialized by the installer then managed
+# through authenticated Settings. Do not store credentials or secrets here.
 poll_seconds: 60
 timezone: America/Chicago
 # The supplied systemd unit uses one worker; leave this enabled for NWS polling.
 start_poller: true
 # Set true only when the reverse proxy serves HTTPS (recommended for deployment).
 session_cookie_secure: true
-states: [AL]
-# Strings remain supported. For named Test Alert checkboxes, use structured
-# entries with their proper NWS SAME and/or UGC identifiers instead.
-# counties:
-#   - name: Madison County, AL
-#     same: "001089"
-#     ugc: ALC089
-counties: []
 alert_types: ["Tornado Warning", "Severe Thunderstorm Warning", "Flash Flood Warning"]
 # Select a read-only discovered Companion channel in Settings after installation.
 max_message_bytes: 180
-transmit_enabled: false
+# The web-managed transmission setting begins disabled; MESHCORE_SEND_ENABLED=0
+# is a separate emergency shutdown in the protected environment file.
 dry_run: true
 device: null

@@ -4,7 +4,7 @@ from uuid import uuid4
 from datetime import datetime, timezone
 from functools import wraps
 from flask import Blueprint, current_app, flash, redirect, render_template, request, session, url_for, jsonify
-from werkzeug.security import check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from .devices import scan_devices, resolve_device
 from .messages import append_comment, radio_message, MessageError
@@ -13,6 +13,7 @@ from .timefmt import local_time, valid_timezones, system_timezone
 from .poller import ingest, eligible, coverage_counties
 from .test_alerts import build_test_alert, TestAlertError
 from .coverage import fetch_catalog, CatalogError
+from .runtime import runtime_config, transmissions_enabled, contact_email, states
 
 bp=Blueprint("console",__name__)
 def admin(fn):
@@ -28,7 +29,7 @@ def device_state(db):
 def feed_state(db):
  last=db.setting("nws_last_success"); error=db.setting("nws_last_error"); stale=True
  if last:
-  try: stale=(datetime.now(timezone.utc)-datetime.fromisoformat(last)).total_seconds()>current_app.config.get("poll_seconds",60)*3
+  try: stale=(datetime.now(timezone.utc)-datetime.fromisoformat(last)).total_seconds()>runtime_config(current_app.config,db)["poll_seconds"]*3
   except ValueError: pass
  return last,error,"stale" if stale else ("error" if error else "healthy")
 def alert_actionability_error(alert):
@@ -46,7 +47,8 @@ def preview_signer(): return URLSafeTimedSerializer(current_app.config["SECRET_K
 @bp.route("/login",methods=["GET","POST"])
 def login():
  if request.method=="POST":
-  if request.form.get("username")==current_app.config["admin_username"] and check_password_hash(current_app.config["admin_password_hash"],request.form.get("password", "")):
+  username,password_hash=current_app.extensions["db"].credentials()
+  if username and password_hash and request.form.get("username")==username and check_password_hash(password_hash,request.form.get("password", "")):
    session.clear();session["user"]=request.form["username"];return redirect(url_for("console.index"))
   flash("Invalid credentials")
  return render_template("login.html")
@@ -110,7 +112,7 @@ def transmit(cap_id):
  except RadioError as exc: flash(f"No transmission: {status}. {exc}");return redirect(url_for("console.index"))
  if not db.claim(cap_id,actor): flash("Alert is no longer actionable.");return redirect(url_for("console.index"))
  try:
-  detail=send(current_app.config,dev,channel,message);db.finish(cap_id,"sent",actor,detail,message);flash("Dispatch recorded. Radio acceptance is not proof of mesh delivery.")
+  detail=send(runtime_config(current_app.config,db),dev,channel,message);db.finish(cap_id,"sent",actor,detail,message);flash("Dispatch recorded. Radio acceptance is not proof of mesh delivery.")
  except RadioError as exc: db.finish(cap_id,"failed",actor,str(exc),message);flash(f"No transmission: {exc}")
  return redirect(url_for("console.index"))
 @bp.route("/settings",methods=["GET","POST"])
@@ -120,14 +122,48 @@ def settings():
  if request.method=="POST":
   value=request.form.get("device");db.save_setting("device",value or "null");db.save_setting("tx_channel","null")
   flash("Device selection saved. Transmit channel cleared and must be selected for this device.");return redirect(url_for("console.settings"))
- coverage=db.coverage();coverage_states=", ".join(sorted({str(state).upper() for state in current_app.config.get("states",[])})) or "none"
+ cfg=runtime_config(current_app.config,db);coverage=db.coverage();coverage_states=", ".join(cfg["states"]) or "none"; unsupported=sum(1 for row in coverage if row["state"] not in cfg["states"])
  saved,dev,status=device_state(db);channels=[];channel_error=None;discovery=None;radio_name=None;name_error=None;cached_radio_name=db.setting("device_name") or ""
  if dev:
   try: discovery=discover_channels(dev);channels=[{"index":x["index"],"name":x["name"]} for x in discovery["slots"] if x["name"]]
   except RadioError as exc: channel_error=str(exc)
   try: radio_name=read_device_name(dev);db.save_setting("device_name",radio_name)
   except RadioError as exc: name_error=str(exc)
- return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,tx_enabled=bool(current_app.config.get("transmit_enabled") and os.environ.get("MESHCORE_SEND_ENABLED")=="1"),coverage_count=len(coverage),coverage_states=coverage_states,channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,radio_name=radio_name,cached_radio_name=cached_radio_name,name_error=name_error,timezones=valid_timezones(),timezone=app_timezone(db))
+ return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,tx_enabled=transmissions_enabled(current_app.config,db),coverage_count=len(coverage),coverage_states=coverage_states,unsupported_coverage=unsupported,channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,radio_name=radio_name,cached_radio_name=cached_radio_name,name_error=name_error,timezones=valid_timezones(),timezone=app_timezone(db),nws_email=db.setting("nws_contact_email") or "",poll_seconds=cfg["poll_seconds"],nws_states=", ".join(cfg["states"]),admin_username=db.setting("auth_username") or "",web_tx_enabled=cfg["transmit_enabled"],emergency_tx=os.environ.get("MESHCORE_SEND_ENABLED")=="1")
+@bp.post("/settings/account")
+@admin
+def account_settings():
+ db=current_app.extensions["db"];username,password_hash=db.credentials();current=request.form.get("current_password","")
+ if not password_hash or not check_password_hash(password_hash,current): flash("Account settings were not changed: current password is incorrect.");return redirect(url_for("console.settings"))
+ requested=request.form.get("username","").strip();new_password=request.form.get("new_password","");confirm=request.form.get("confirm_password","")
+ try:
+  if requested and (len(requested)<3 or len(requested)>64 or not requested.replace("_","").replace("-","").isalnum()): raise ValueError("username must be 3–64 letters, digits, hyphens, or underscores")
+  values={}
+  if requested and requested!=username: values["auth_username"]=requested
+  if new_password:
+   if len(new_password)<12: raise ValueError("new password must be at least 12 characters")
+   if new_password!=confirm: raise ValueError("new password confirmation does not match")
+   values["auth_password_hash"]=generate_password_hash(new_password)
+  if not values: raise ValueError("enter a new username or password")
+  db.save_settings(values);session.clear();db.audit(None,"administrator_account_changed",username,"credentials changed");flash("Account settings saved. Sign in again.")
+ except ValueError as exc: flash(f"Account settings were not changed: {exc}")
+ return redirect(url_for("console.settings"))
+@bp.post("/settings/nws")
+@admin
+def nws_settings():
+ db=current_app.extensions["db"]
+ try:
+  email=contact_email(request.form.get("contact_email", ""));interval=int(request.form.get("poll_seconds","0"));selected=states(request.form.get("states",""))
+  if interval<60: raise ValueError("polling interval must be at least 60 seconds")
+  retained=[row for row in db.coverage() if row["state"] not in selected]
+  if retained and request.form.get("confirm_retained_counties")!="yes": raise ValueError(f"{len(retained)} selected county or counties remain outside the proposed polling states; confirm to keep them without monitoring them")
+  db.save_settings({"nws_contact_email":email,"nws_poll_seconds":str(interval),"nws_states":json.dumps(selected)});db.audit(None,"nws_settings_changed",session["user"],f"states={','.join(selected)} interval={interval}");flash("NWS settings saved. The next polling cycle will use them.")
+ except (ValueError,TypeError) as exc: flash(f"NWS settings were not changed: {exc}")
+ return redirect(url_for("console.settings"))
+@bp.post("/settings/transmission")
+@admin
+def transmission_settings():
+ db=current_app.extensions["db"];enabled=request.form.get("transmit_enabled")=="yes";db.save_setting("transmit_enabled","true" if enabled else "false");db.audit(None,"transmission_setting_changed",session["user"],"enabled" if enabled else "disabled");flash("Transmission setting saved. Every message still requires manual approval and the environment emergency shutdown remains in effect.");return redirect(url_for("console.settings"))
 @bp.route("/settings/coverage-counties",methods=["GET","POST"])
 @admin
 def coverage_counties_page():
@@ -139,11 +175,11 @@ def coverage_counties_page():
   action=request.form.get("action");return_filters={"state":request.form.get("return_state",""),"q":request.form.get("return_query","")}
   try:
    if action=="import":
-    rows,meta=fetch_catalog(current_app.config["nws_user_agent"]);db.replace_catalog(rows,meta);db.audit(None,"county_catalog_imported",session["user"],f"{len(rows)} counties; {meta['source']}");flash("County catalog imported. Coverage was not changed.")
+    rows,meta=fetch_catalog(runtime_config(current_app.config,db)["nws_user_agent"]);db.replace_catalog(rows,meta);db.audit(None,"county_catalog_imported",session["user"],f"{len(rows)} counties; {meta['source']}");flash("County catalog imported. Coverage was not changed.")
    elif action=="save":
     selected=request.form.getlist("county")
     if len(selected)>25 and request.form.get("confirm_expand")!="yes": raise CatalogError("confirm this coverage expansion before saving")
-    db.save_coverage(selected,{str(x).upper() for x in current_app.config.get("states",[])});db.audit(None,"coverage_counties_saved",session["user"],f"{len(selected)} counties selected");flash(f"Coverage saved: {len(selected)} counties.")
+    db.save_coverage(selected,set(runtime_config(current_app.config,db)["states"]));db.audit(None,"coverage_counties_saved",session["user"],f"{len(selected)} counties selected");flash(f"Coverage saved: {len(selected)} counties.")
   except (CatalogError,ValueError,requests.RequestException) as exc:
    flash(f"Coverage was not changed: {exc}")
    if action=="save": return page(return_filters["state"],return_filters["q"],request.form.getlist("county"))
@@ -223,9 +259,9 @@ def test_messaging():
   elif request.form.get("confirm")!="yes": flash("Test message not sent: confirmation required.")
   else:
    try:
-    verify_channel(dev,channel);detail=send(current_app.config,dev,channel,message);outcome="simulated" if current_app.config.get("dry_run") else "accepted";db.test_message(session["user"],channel,message,outcome,detail);flash(f"Test result: {outcome}. {detail}")
+    verify_channel(dev,channel);detail=send(runtime_config(current_app.config,db),dev,channel,message);outcome="simulated" if current_app.config.get("dry_run") else "accepted";db.test_message(session["user"],channel,message,outcome,detail);flash(f"Test result: {outcome}. {detail}")
    except RadioError as exc: db.test_message(session["user"],channel or {"name":"none","index":-1},message,"failed",str(exc));flash(f"Test message failed: {status}. {exc}")
- return render_template("test_messaging.html",channel=channel,device_name=db.setting("device_name") or "unknown",status=status,cap=message_limit(current_app.config),history=db.test_history(),enabled=bool(channel and dev and current_app.config.get("transmit_enabled") and os.environ.get("MESHCORE_SEND_ENABLED")=="1"))
+ return render_template("test_messaging.html",channel=channel,device_name=db.setting("device_name") or "unknown",status=status,cap=message_limit(current_app.config),history=db.test_history(),enabled=bool(channel and dev and transmissions_enabled(current_app.config,db)))
 @bp.route("/test-alerts",methods=["GET","POST"])
 @admin
 def test_alerts():

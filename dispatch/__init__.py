@@ -14,10 +14,10 @@ from .coverage import config_rows
 csrf = CSRFProtect()
 
 def validate_config(config: dict) -> None:
-    if not config.get("states"):
-        raise ValueError("at least one NWS state must be configured; refusing to poll every U.S. alert")
-    if int(config.get("poll_seconds", 60)) < 30:
-        raise ValueError("poll_seconds must be at least 30 to respect NWS rate guidance")
+    if "states" in config and not config["states"]:
+        raise ValueError("configured NWS state list cannot be empty; remove the legacy key for first-run web setup")
+    if int(config.get("poll_seconds", 60)) < 60:
+        raise ValueError("poll_seconds must be at least 60 to respect NWS rate guidance")
     if int(config.get("max_message_bytes", 180)) < 1:
         raise ValueError("max_message_bytes must be positive")
 
@@ -44,6 +44,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.jinja_env.filters["localtime"] = lambda value: local_time(value, app.extensions["db"].setting("timezone") or app.config.get("timezone") or system_timezone())
     app.jinja_env.filters["compacttime"] = lambda value: compact_local_time(value, app.extensions["db"].setting("timezone") or app.config.get("timezone") or system_timezone())
     app.extensions["db"].initialize()
+    app.extensions["db"].bootstrap_operational_settings(config)
     app.extensions["db"].migrate_coverage(config_rows(app.config.get("counties",[])))
     app.config["coverage_db"]=app.extensions["db"]
     csrf.init_app(app)
