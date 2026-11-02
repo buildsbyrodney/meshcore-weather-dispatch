@@ -55,7 +55,7 @@ jobs:
           PY
           curl -fsS -b /tmp/cookies "$base/test-alerts" -o /tmp/test-alerts.html
           csrf=$(sed -n 's/.*name="csrf_token" value="\([^"]*\)".*/\1/p' /tmp/test-alerts.html | head -1)
-          curl -fsS -b /tmp/cookies -d "csrf_token=$csrf&county=ALC089&event=Tornado+Warning" -o /dev/null "$base/test-alerts"
+          curl -fsS -b /tmp/cookies -d "csrf_token=$csrf&county=same%3A001089%7Cugc%3AALC089&event=Tornado+Warning" -o /dev/null "$base/test-alerts"
           cap=$(sudo -u weatherdispatch /opt/meshcore-weather-dispatch/.venv/bin/python - <<'PY'
           from dispatch.db import Database
           print(Database('/var/lib/meshcore-weather-dispatch/dispatch.sqlite3').actionable()[0]['cap_id'])
