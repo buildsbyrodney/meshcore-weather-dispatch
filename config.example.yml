@@ -2,7 +2,7 @@ database: /var/lib/meshcore-weather-dispatch/dispatch.sqlite3
 host: 127.0.0.1
 port: 8080
 secret_key_env: WEATHER_DISPATCH_SECRET_KEY
-# Administrator, NWS contact, polling states/interval, coverage counties, and
+# Administrator, NWS contact, polling states/interval, and
 # normal transmission enablement are initialized by the installer then managed
 # through authenticated Settings. Do not store credentials or secrets here.
 poll_seconds: 60

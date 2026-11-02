@@ -79,18 +79,7 @@ Selected states now live in Settings. Legacy `counties` accepts NWS SAME six-dig
 
 **Test Alerts** creates one local, synthetic CAP warning for exercising the same geographic filtering, byte shortening, audit history, and manual dispatch controls used by the NWS feed. It never contacts NWS, opens the Companion, or transmits by itself. Every generated alert, dashboard card, shortened message, and audit entry—including later send, ignore, expiration, revision, or cancellation events—is marked **TEST ONLY**. Sending or ignoring it remains a separate operator decision, subject to the normal radio and environment interlocks. Synthetic and genuine CAP revision families are kept separate even if a submitted reference names a real alert.
 
-The checkbox list is populated only from SQLite-selected Coverage Counties. Legacy YAML entries are migration-only and are not required for new installations.
-
-```yaml
-states: [AL, TN]
-counties:
-  - name: Madison County, AL
-    same: "001089"
-    ugc: ALC089
-  - name: Lincoln County, TN
-    same: "047103"
-    ugc: TNC103
-```
+The checkbox list is populated only from SQLite-selected Coverage Counties. Legacy YAML county entries are accepted once during an upgrade migration, then retained only in SQLite; new installations never need county YAML.
 
 Select one or more entries. The application stores every selected SAME/UGC code in one synthetic alert's `geocode` fields and does not split the selection into multiple alerts or radio messages. An invalid, unconfigured, or empty selection is rejected.
 
