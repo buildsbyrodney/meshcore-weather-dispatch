@@ -53,7 +53,7 @@ jobs:
           csrf=$(sed -n 's/.*name="csrf_token" value="\([^"]*\)".*/\1/p' /tmp/login.html | head -1)
           curl -fsS -b /tmp/cookies -c /tmp/cookies -d "csrf_token=$csrf&username=ciadmin&password=ci-password-long-enough" -o /dev/null -D /tmp/login.headers "$base/login"
           grep -qi '^location: /' /tmp/login.headers
-          curl -fsS -b /tmp/cookies "$base/settings" -o /tmp/settings.html
+          curl -fsS -b /tmp/cookies -c /tmp/cookies "$base/settings" -o /tmp/settings.html
           grep -q 'NWS Monitoring' /tmp/settings.html
           sudo -u weatherdispatch /opt/meshcore-weather-dispatch/.venv/bin/python - <<'PY'
           from dispatch.db import Database
@@ -62,15 +62,15 @@ jobs:
           db.save_coverage(['ALC089'],{'AL'})
           db.save_setting('tx_channel','{"index":1,"name":"#ci"}')
           PY
-          curl -fsS -b /tmp/cookies "$base/test-alerts" -o /tmp/test-alerts.html
+          curl -fsS -b /tmp/cookies -c /tmp/cookies "$base/test-alerts" -o /tmp/test-alerts.html
           csrf=$(sed -n 's/.*name="csrf_token" value="\([^"]*\)".*/\1/p' /tmp/test-alerts.html | head -1)
-          checked_post 'Test Alerts' -b /tmp/cookies --data-urlencode "csrf_token=$csrf" --data-urlencode 'county=same:001089|ugc:ALC089' --data-urlencode 'event=Tornado Warning' "$base/test-alerts"
+          checked_post 'Test Alerts' -b /tmp/cookies -c /tmp/cookies --data-urlencode "csrf_token=$csrf" --data-urlencode 'county=same:001089|ugc:ALC089' --data-urlencode 'event=Tornado Warning' "$base/test-alerts"
           cap=$(sudo -u weatherdispatch /opt/meshcore-weather-dispatch/.venv/bin/python - <<'PY'
           from dispatch.db import Database
           print(Database('/var/lib/meshcore-weather-dispatch/dispatch.sqlite3').actionable()[0]['cap_id'])
           PY
           )
-          checked_post 'Dispatch preview' -b /tmp/cookies --data-urlencode "csrf_token=$csrf" --data-urlencode 'comment=' "$base/alerts/$cap/preview"
+          checked_post 'Dispatch preview' -b /tmp/cookies -c /tmp/cookies --data-urlencode "csrf_token=$csrf" --data-urlencode 'comment=' "$base/alerts/$cap/preview"
           grep -q 'message' /tmp/http-body
       - name: Upgrade preserves durable state
         env:
