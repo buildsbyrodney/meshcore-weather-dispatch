@@ -1,5 +1,5 @@
 from __future__ import annotations
-import sqlite3
+import sqlite3, json
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -40,6 +40,15 @@ class Database:
             for name, kind in (("family_id","TEXT"),("content_hash","TEXT"),("revision_label","TEXT"),("test_only","INTEGER NOT NULL DEFAULT 0")):
                 if name not in columns: c.execute(f"ALTER TABLE alerts ADD COLUMN {name} {kind}")
             c.execute("CREATE INDEX IF NOT EXISTS idx_alert_family ON alerts(family_id, created_at)")
+    def bootstrap_operational_settings(self, config):
+        """Seed web-managed values once; never overwrite an operator's changes."""
+        values={"auth_username":config.get("admin_username", ""),"auth_password_hash":config.get("admin_password_hash", ""),"nws_states":json.dumps(config.get("states",[])),"nws_poll_seconds":str(max(60,int(config.get("poll_seconds",60)))),"transmit_enabled":"true" if config.get("transmit_enabled",False) else "false"}
+        candidate=str(config.get("nws_user_agent","")).rsplit(" ",1)[-1].strip("() ")
+        if "@" in candidate: values["nws_contact_email"]=candidate
+        with self.connect() as c:
+            for key,value in values.items():
+                if value: c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)",(key,value))
+    def credentials(self): return self.setting("auth_username"),self.setting("auth_password_hash")
     def audit(self, cap_id, action, actor=None, detail=None, message=None):
         with self.connect() as c:
             c.execute("INSERT INTO audit(cap_id,action,actor,detail,message,created_at) VALUES(?,?,?,?,?,?)", (cap_id, action, actor, detail, message, now()))
@@ -83,6 +92,9 @@ class Database:
         with self.connect() as c: return c.execute("SELECT * FROM alerts WHERE cap_id=?", (cap_id,)).fetchone()
     def save_setting(self, key, value):
         with self.connect() as c: c.execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+    def save_settings(self, values):
+        with self.connect() as c:
+            c.execute("BEGIN IMMEDIATE");c.executemany("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",values.items());c.execute("COMMIT")
     def setting(self, key):
         with self.connect() as c:
             row=c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone(); return row[0] if row else None
@@ -113,7 +125,7 @@ class Database:
             rows=c.execute("SELECT * FROM county_catalog WHERE ugc IN (%s)" % ",".join("?"*len(ugcs)),ugcs).fetchall() if ugcs else []
             if not rows: raise ValueError("select at least one catalog county; unrestricted monitoring is not allowed")
             if len(rows)!=len(set(ugcs)): raise ValueError("one or more selected counties are not in the catalog")
-            if allowed_states and any(r["state"] not in allowed_states for r in rows): raise ValueError("select only counties in configured NWS states; update config.yml explicitly before expanding polling")
+            if allowed_states is not None and any(r["state"] not in allowed_states for r in rows): raise ValueError("select only counties in configured NWS states; update NWS Settings before expanding coverage")
             c.execute("BEGIN IMMEDIATE");c.execute("DELETE FROM coverage_counties");c.executemany("INSERT INTO coverage_counties VALUES(?,?,?,?,?)",[(r["ugc"],r["state"],r["name"],r["same"],now()) for r in rows]);c.execute("COMMIT")
     def migrate_coverage(self, rows):
         if self.setting("coverage_migrated"): return

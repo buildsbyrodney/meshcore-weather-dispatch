@@ -6,6 +6,7 @@ from pathlib import Path
 import yaml
 from flask import Flask
 from flask_wtf.csrf import CSRFProtect
+from werkzeug.middleware.proxy_fix import ProxyFix
 from .db import Database
 from .routes import bp
 from .timefmt import local_time, compact_local_time, system_timezone
@@ -14,10 +15,10 @@ from .coverage import config_rows
 csrf = CSRFProtect()
 
 def validate_config(config: dict) -> None:
-    if not config.get("states"):
-        raise ValueError("at least one NWS state must be configured; refusing to poll every U.S. alert")
-    if int(config.get("poll_seconds", 60)) < 30:
-        raise ValueError("poll_seconds must be at least 30 to respect NWS rate guidance")
+    if "states" in config and not config["states"]:
+        raise ValueError("configured NWS state list cannot be empty; remove the legacy key for first-run web setup")
+    if int(config.get("poll_seconds", 60)) < 60:
+        raise ValueError("poll_seconds must be at least 60 to respect NWS rate guidance")
     if int(config.get("max_message_bytes", 180)) < 1:
         raise ValueError("max_message_bytes must be positive")
 
@@ -40,10 +41,12 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.config.update(config, SECRET_KEY=config["secret_key"], WTF_CSRF_TIME_LIMIT=3600,
                       SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
                       SESSION_COOKIE_SECURE=bool(config.get("session_cookie_secure", False)))
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
     app.extensions["db"] = Database(app.config["database"])
     app.jinja_env.filters["localtime"] = lambda value: local_time(value, app.extensions["db"].setting("timezone") or app.config.get("timezone") or system_timezone())
     app.jinja_env.filters["compacttime"] = lambda value: compact_local_time(value, app.extensions["db"].setting("timezone") or app.config.get("timezone") or system_timezone())
     app.extensions["db"].initialize()
+    app.extensions["db"].bootstrap_operational_settings(config)
     app.extensions["db"].migrate_coverage(config_rows(app.config.get("counties",[])))
     app.config["coverage_db"]=app.extensions["db"]
     csrf.init_app(app)

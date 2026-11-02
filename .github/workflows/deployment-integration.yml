@@ -1,0 +1,193 @@
+name: deployment integration
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  debian-compatible-deployment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Prepare disposable local deployment remote
+        run: |
+          git config user.email integration@example.invalid
+          git config user.name integration
+          git branch -f integration "$GITHUB_SHA"
+          git clone --bare . /tmp/meshcore-origin.git
+          chmod -R a+rX /tmp/meshcore-origin.git
+          sudo systemctl stop apache2 nginx 2>/dev/null || true
+          if sudo ss -ltnH '( sport = :80 )' | grep -q .; then echo 'port 80 is not disposable on this runner'; exit 1; fi
+      - name: Fresh install through the production installer
+        env:
+          REPO_URL: file:///tmp/meshcore-origin.git
+          APP_BRANCH: integration
+        run: |
+          printf 'ciadmin\nci@example.invalid\nAL\nci-password-long-enough\n' | sudo -E bash "$GITHUB_WORKSPACE/scripts/install.sh"
+          sudo systemctl is-active --quiet nginx meshcore-weather-dispatch
+          sudo ss -ltn | grep -q '127.0.0.1:8080'
+          ! sudo ss -ltn | grep -qE '0\.0\.0\.0:8080|\[::\]:8080'
+          sudo test -d /opt/meshcore-weather-dispatch/.git
+          sudo -u weatherdispatch git -C /opt/meshcore-weather-dispatch remote get-url origin | grep -q /tmp/meshcore-origin.git
+          sudo grep -q '^MESHCORE_SEND_ENABLED=0$' /etc/meshcore-weather-dispatch/environment
+      - name: Exercise authenticated proxy workflow
+        run: |
+          base=http://127.0.0.1
+          checked_post() {
+            label=$1; shift
+            status=$(curl -sS -o /tmp/http-body -w '%{http_code}' "$@")
+            echo "$label HTTP $status"
+            if [[ "$status" != 200 && "$status" != 302 ]]; then
+              sed -E 's/(csrf_token|token|password|secret)=[^& <]*/\1=[redacted]/g; s/value="[^"]*"/value="[redacted]"/g' /tmp/http-body | tr '\n' ' ' | cut -c1-500
+              exit 1
+            fi
+          }
+          curl -fsS -c /tmp/cookies "$base/login" -o /tmp/login.html
+          csrf=$(sed -n 's/.*name="csrf_token" value="\([^"]*\)".*/\1/p' /tmp/login.html | head -1)
+          curl -fsS -b /tmp/cookies -c /tmp/cookies -d "csrf_token=$csrf&username=ciadmin&password=ci-password-long-enough" -o /dev/null -D /tmp/login.headers "$base/login"
+          grep -qi '^location: /' /tmp/login.headers
+          curl -fsS -b /tmp/cookies -c /tmp/cookies "$base/settings" -o /tmp/settings.html
+          grep -q 'NWS Monitoring' /tmp/settings.html
+          sudo -u weatherdispatch /opt/meshcore-weather-dispatch/.venv/bin/python - <<'PY'
+          from dispatch.db import Database
+          db=Database('/var/lib/meshcore-weather-dispatch/dispatch.sqlite3')
+          db.replace_catalog([{'ugc':'ALC089','state':'AL','name':'Madison','same':'001089'}],{'source':'ci'})
+          db.save_coverage(['ALC089'],{'AL'})
+          db.save_setting('tx_channel','{"index":1,"name":"#ci"}')
+          PY
+          curl -fsS -b /tmp/cookies -c /tmp/cookies "$base/test-alerts" -o /tmp/test-alerts.html
+          csrf=$(sed -n 's/.*name="csrf_token" value="\([^"]*\)".*/\1/p' /tmp/test-alerts.html | head -1)
+          checked_post 'Test Alerts' -b /tmp/cookies -c /tmp/cookies --data-urlencode "csrf_token=$csrf" --data-urlencode 'county=same:001089|ugc:ALC089' --data-urlencode 'event=Tornado Warning' "$base/test-alerts"
+          cap=$(sudo -u weatherdispatch /opt/meshcore-weather-dispatch/.venv/bin/python - <<'PY'
+          from dispatch.db import Database
+          print(Database('/var/lib/meshcore-weather-dispatch/dispatch.sqlite3').actionable()[0]['cap_id'])
+          PY
+          )
+          checked_post 'Dispatch preview' -b /tmp/cookies -c /tmp/cookies --data-urlencode "csrf_token=$csrf" --data-urlencode 'comment=' "$base/alerts/$cap/preview"
+          grep -q 'message' /tmp/http-body
+      - name: Upgrade preserves durable state
+        env:
+          UPDATE_BRANCH: integration
+        run: |
+          before_secret=$(sudo sha256sum /etc/meshcore-weather-dispatch/environment | cut -d' ' -f1)
+          sudo -E bash "$GITHUB_WORKSPACE/scripts/update.sh"
+          test "$before_secret" = "$(sudo sha256sum /etc/meshcore-weather-dispatch/environment | cut -d' ' -f1)"
+          sudo systemctl is-active --quiet meshcore-weather-dispatch
+          sudo -u weatherdispatch /opt/meshcore-weather-dispatch/.venv/bin/python - <<'PY'
+          from dispatch.db import Database
+          db=Database('/var/lib/meshcore-weather-dispatch/dispatch.sqlite3')
+          assert db.credentials()[0]=='ciadmin' and db.coverage() and db.setting('tx_channel')
+          assert db.setting('transmit_enabled')=='false'
+          PY
+      - name: Simulated invalid proxy upgrade rolls back
+        env:
+          UPDATE_BRANCH: integration
+        run: |
+          printf '\ninvalid nginx directive;\n' >> nginx/meshcore-weather-dispatch.conf
+          git add nginx/meshcore-weather-dispatch.conf && git commit -m 'ci intentionally invalid nginx'
+          git push file:///tmp/meshcore-origin.git HEAD:integration
+          if sudo -E bash "$GITHUB_WORKSPACE/scripts/update.sh"; then echo 'expected upgrade failure'; exit 1; fi
+          sudo systemctl is-active --quiet meshcore-weather-dispatch
+          curl -fsSI http://127.0.0.1/ | grep -qi 'HTTP/'
+          ! sudo grep -q 'invalid nginx directive' /etc/nginx/sites-available/meshcore-weather-dispatch
+          sudo test -d /var/backups/meshcore-weather-dispatch
+  legacy-wxalert-migration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build a disposable pre-PR13 WXALERT layout
+        run: |
+          git config user.email integration@example.invalid; git config user.name integration
+          git branch -f integration "$GITHUB_SHA"; git clone --bare . /tmp/meshcore-origin.git; chmod -R a+rX /tmp/meshcore-origin.git
+          sudo systemctl stop apache2 nginx 2>/dev/null || true
+          sudo apt-get purge -y nginx nginx-common
+          sudo adduser --system --group --home /opt/meshcore-weather-dispatch weatherdispatch
+          sudo git clone --branch integration --single-branch file:///tmp/meshcore-origin.git /opt/meshcore-weather-dispatch
+          sudo chown -R weatherdispatch:weatherdispatch /opt/meshcore-weather-dispatch
+          sudo -u weatherdispatch sh -c 'cd /opt/meshcore-weather-dispatch && python3 -m venv .venv && .venv/bin/pip install -e .'
+          sudo install -d -o weatherdispatch -g weatherdispatch -m 750 /etc/meshcore-weather-dispatch /var/lib/meshcore-weather-dispatch /etc/systemd/system/meshcore-weather-dispatch.service.d
+          sudo tee /etc/meshcore-weather-dispatch/config.yml >/dev/null <<'EOF'
+          database: /var/lib/meshcore-weather-dispatch/dispatch.sqlite3
+          host: 127.0.0.1
+          port: 8080
+          secret_key_env: WEATHER_DISPATCH_SECRET_KEY
+          admin_username: ciadmin
+          admin_password_hash: "scrypt:32768:8:1$X$C8YciwLCAazhj6PeXTvoUHl0LTB7qm4JzB47lqYsOiwD9sEzKJzQx9QHdT1yTQ"
+          nws_user_agent: "MeshCoreWeatherDispatch/0.1 ci@example.invalid"
+          poll_seconds: 60
+          timezone: America/Chicago
+          start_poller: false
+          session_cookie_secure: false
+          states: [AL]
+          counties: []
+          alert_types: ["Tornado Warning"]
+          max_message_bytes: 180
+          transmit_enabled: false
+          dry_run: true
+          EOF
+          sudo tee /etc/meshcore-weather-dispatch/environment >/dev/null <<'EOF'
+          WEATHER_DISPATCH_SECRET_KEY=legacy-ci-secret-not-production
+          MESHCORE_SEND_ENABLED=0
+          EOF
+          sudo chown weatherdispatch:weatherdispatch /etc/meshcore-weather-dispatch/{config.yml,environment}
+          sudo tee /etc/systemd/system/meshcore-weather-dispatch.service >/dev/null <<'EOF'
+          [Unit]
+          Description=MeshCore Weather Dispatch (manual NWS alert console)
+          After=network-online.target
+          Wants=network-online.target
+          [Service]
+          Type=simple
+          User=weatherdispatch
+          Group=weatherdispatch
+          WorkingDirectory=/opt/meshcore-weather-dispatch
+          EnvironmentFile=/etc/meshcore-weather-dispatch/environment
+          Environment=WEATHER_DISPATCH_CONFIG=/etc/meshcore-weather-dispatch/config.yml
+          ExecStart=/opt/meshcore-weather-dispatch/.venv/bin/gunicorn --workers 1 --bind 127.0.0.1:8080 'dispatch:create_app()'
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          sudo tee /etc/systemd/system/meshcore-weather-dispatch.service.d/local.conf >/dev/null <<'EOF'
+          [Service]
+          Environment=LEGACY_OVERRIDE_PRESERVED=1
+          EOF
+          sudo -u weatherdispatch /opt/meshcore-weather-dispatch/.venv/bin/python - <<'PY'
+          from dispatch.db import Database
+          db=Database('/var/lib/meshcore-weather-dispatch/dispatch.sqlite3'); db.initialize(); db.bootstrap_operational_settings({'admin_username':'ciadmin','admin_password_hash':'scrypt:32768:8:1$X$C8YciwLCAazhj6PeXTvoUHl0LTB7qm4JzB47lqYsOiwD9sEzKJzQx9QHdT1yTQ','states':['AL'],'nws_user_agent':'MeshCoreWeatherDispatch/0.1 ci@example.invalid','poll_seconds':60,'transmit_enabled':False}); db.replace_catalog([{'ugc':'ALC089','state':'AL','name':'Madison','same':'001089'}],{'source':'legacy'}); db.save_coverage(['ALC089']); db.save_setting('device','{"stable_path":"/dev/null"}'); db.save_setting('tx_channel','{"index":1,"name":"#ci"}')
+          PY
+          sudo systemctl daemon-reload; sudo systemctl enable --now meshcore-weather-dispatch
+      - name: Migrate legacy installation and verify durable state
+        env:
+          UPDATE_BRANCH: integration
+        run: |
+          before_secret=$(sudo sha256sum /etc/meshcore-weather-dispatch/environment | cut -d' ' -f1)
+          sudo -E bash "$GITHUB_WORKSPACE/scripts/update.sh"
+          sudo systemctl is-active --quiet nginx meshcore-weather-dispatch
+          sudo grep -q -- '--no-control-socket' /etc/systemd/system/meshcore-weather-dispatch.service
+          sudo test -f /etc/systemd/system/meshcore-weather-dispatch.service.d/local.conf
+          test "$before_secret" = "$(sudo sha256sum /etc/meshcore-weather-dispatch/environment | cut -d' ' -f1)"
+          sudo -u weatherdispatch /opt/meshcore-weather-dispatch/.venv/bin/python - <<'PY'
+          from dispatch.db import Database
+          db=Database('/var/lib/meshcore-weather-dispatch/dispatch.sqlite3'); assert db.coverage() and db.setting('device') and db.setting('tx_channel'); assert db.setting('transmit_enabled')=='false'
+          PY
+          sudo test -d /var/backups/meshcore-weather-dispatch
+          sudo -E bash "$GITHUB_WORKSPACE/scripts/update.sh"
+          curl -fsSI http://127.0.0.1/ | grep -qi HTTP/
+      - name: Refuse unsafe migration inputs without stopping service
+        env:
+          UPDATE_BRANCH: integration
+        run: |
+          sudo cp /etc/systemd/system/meshcore-weather-dispatch.service /tmp/unit.good
+          echo '# custom' | sudo tee /etc/systemd/system/meshcore-weather-dispatch.service >/dev/null
+          if sudo -E bash "$GITHUB_WORKSPACE/scripts/update.sh"; then exit 1; fi
+          sudo cp /tmp/unit.good /etc/systemd/system/meshcore-weather-dispatch.service; sudo systemctl daemon-reload; sudo systemctl start meshcore-weather-dispatch
+          sudo systemctl is-active --quiet meshcore-weather-dispatch

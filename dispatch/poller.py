@@ -3,6 +3,7 @@ import json, time, requests, hashlib, re
 from datetime import datetime, timezone
 from .db import now
 from .messages import radio_message
+from .runtime import runtime_config
 
 NWS = "https://api.weather.gov/alerts/active"
 def iso_past(value):
@@ -110,7 +111,13 @@ def ingest(app, features):
             mark(c,r[0],"expired","local expiration")
 
 def fetch(app):
-    cfg=app.config; params=[]
+    cfg=runtime_config(app.config,app.extensions["db"]); params=[]
+    if not cfg["states"]:
+        app.extensions["db"].save_setting("nws_last_error","NWS polling is not configured: select one or more states in Settings")
+        return
+    if not cfg.get("nws_user_agent"):
+        app.extensions["db"].save_setting("nws_last_error","NWS polling is not configured: set a monitored contact email in Settings")
+        return
     for state in cfg.get("states",[]): params.append(("area",state.upper()))
     try:
         response=requests.get(NWS, params=params, headers={"User-Agent":cfg["nws_user_agent"],"Accept":"application/geo+json"}, timeout=15)
@@ -128,4 +135,4 @@ def run_poller(app):
             with app.app_context(): fetch(app)
         except Exception as exc:
             app.logger.exception("NWS polling failed: %s",exc)
-        time.sleep(app.config.get("poll_seconds",60))
+        time.sleep(runtime_config(app.config,app.extensions["db"])["poll_seconds"])
