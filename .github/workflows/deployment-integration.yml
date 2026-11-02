@@ -30,7 +30,7 @@ jobs:
           REPO_URL: file:///tmp/meshcore-origin.git
           APP_BRANCH: integration
         run: |
-          printf 'ciadmin\nci@example.invalid\nAL\nci-password-long-enough\n' | sudo -E "$GITHUB_WORKSPACE/scripts/install.sh"
+          printf 'ciadmin\nci@example.invalid\nAL\nci-password-long-enough\n' | sudo -E bash "$GITHUB_WORKSPACE/scripts/install.sh"
           sudo systemctl is-active --quiet nginx meshcore-weather-dispatch
           sudo ss -ltn | grep -q '127.0.0.1:8080'
           ! sudo ss -ltn | grep -qE '0\.0\.0\.0:8080|\[::\]:8080'
@@ -67,7 +67,7 @@ jobs:
           UPDATE_BRANCH: integration
         run: |
           before_secret=$(sudo sha256sum /etc/meshcore-weather-dispatch/environment | cut -d' ' -f1)
-          sudo -E "$GITHUB_WORKSPACE/scripts/update.sh"
+          sudo -E bash "$GITHUB_WORKSPACE/scripts/update.sh"
           test "$before_secret" = "$(sudo sha256sum /etc/meshcore-weather-dispatch/environment | cut -d' ' -f1)"
           sudo systemctl is-active --quiet meshcore-weather-dispatch
           sudo -u weatherdispatch /opt/meshcore-weather-dispatch/.venv/bin/python - <<'PY'
@@ -83,7 +83,7 @@ jobs:
           printf '\ninvalid nginx directive;\n' >> nginx/meshcore-weather-dispatch.conf
           git add nginx/meshcore-weather-dispatch.conf && git commit -m 'ci intentionally invalid nginx'
           git push file:///tmp/meshcore-origin.git HEAD:integration
-          if sudo -E "$GITHUB_WORKSPACE/scripts/update.sh"; then echo 'expected upgrade failure'; exit 1; fi
+          if sudo -E bash "$GITHUB_WORKSPACE/scripts/update.sh"; then echo 'expected upgrade failure'; exit 1; fi
           sudo systemctl is-active --quiet meshcore-weather-dispatch
           curl -fsSI http://127.0.0.1/ | grep -qi 'HTTP/'
           ! sudo grep -q 'invalid nginx directive' /etc/nginx/sites-available/meshcore-weather-dispatch
