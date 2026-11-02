@@ -1,0 +1,43 @@
+/* Transmission Settings has its own compact, responsive interlock summary. */
+.transmission-settings .inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: .45rem;
+  margin: .6rem 0;
+}
+
+.transmission-settings .inline-check input[type="checkbox"] {
+  block-size: 1rem;
+  inline-size: 1rem;
+  margin: 0;
+  padding: 0;
+}
+
+.transmission-settings .transmission-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  margin: .65rem 0;
+}
+
+.transmission-settings .interlock-status {
+  background: #f7f9fa;
+  border: 1px solid #ccd6dc;
+  border-left: 4px solid #667;
+  border-radius: .3rem;
+  flex: 1 1 150px;
+  font-size: .86rem;
+  padding: .45rem .55rem;
+}
+
+.transmission-settings .interlock-status b,
+.transmission-settings .interlock-status span { display: block; }
+.transmission-settings .interlock-status.enabled { background: #eef8f1; border-left-color: #287447; }
+.transmission-settings .interlock-status.disabled { background: #fff0ef; border-left-color: #b33030; }
+.transmission-settings .interlock-status.dry-run { background: #fff8e3; border-left-color: #b58200; }
+.transmission-settings .interlock-status.effective { font-weight: 600; }
+.transmission-settings .interlock-explanation { color: #37474f; font-size: .9rem; margin: .55rem 0; }
+
+@media (max-width: 650px) {
+  .transmission-settings .interlock-status { flex-basis: calc(50% - .25rem); min-inline-size: 0; }
+}
