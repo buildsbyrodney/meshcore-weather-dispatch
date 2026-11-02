@@ -35,6 +35,15 @@ sudo ./scripts/install.sh
 
 The installer prompts for an administrator username, NWS contact email, polling state codes such as `AL,TN`, and an initial password. It prints the trusted-LAN URL when the service responds, normally `http://<Pi-IP>/`.
 
+If power, networking, or a package operation interrupts the first install after the application checkout is created, rerunning the installer stops safely rather than reusing it. First confirm that no initial state was created, then remove only the incomplete application checkout and rerun from the source checkout:
+
+```bash
+sudo test ! -e /etc/meshcore-weather-dispatch/environment && sudo test ! -e /var/lib/meshcore-weather-dispatch/dispatch.sqlite3 && sudo rm -rf /opt/meshcore-weather-dispatch
+sudo ./scripts/install.sh
+```
+
+Do not use those removal commands for a completed installation; use `sudo /opt/meshcore-weather-dispatch/scripts/update.sh` instead.
+
 The secret is generated once in `/etc/meshcore-weather-dispatch/environment` with restrictive permissions. It is never displayed by the application. The initial administrator password is stored only as a secure hash in SQLite. New installations allow manual transmissions in Settings, but no Companion or transmit channel is selected and installation cannot open or send through a radio.
 
 Verify the local service after installation:
