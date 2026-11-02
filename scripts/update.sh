@@ -26,5 +26,7 @@ runuser -u weatherdispatch -- sh -c 'cd "$1" && .venv/bin/pip install --upgrade 
 install -m 644 "$APP/systemd/meshcore-weather-dispatch.service" /etc/systemd/system/meshcore-weather-dispatch.service
 [[ -e /etc/nginx/sites-enabled/meshcore-weather-dispatch && ! -L /etc/nginx/sites-enabled/meshcore-weather-dispatch ]] && { echo 'Managed Nginx link replaced; refusing overwrite.' >&2; exit 1; }
 install -m 644 "$APP/nginx/meshcore-weather-dispatch.conf" /etc/nginx/sites-available/meshcore-weather-dispatch; [[ -e /etc/nginx/sites-enabled/meshcore-weather-dispatch ]] || ln -s /etc/nginx/sites-available/meshcore-weather-dispatch /etc/nginx/sites-enabled/meshcore-weather-dispatch
-nginx -t; systemctl daemon-reload; systemctl reload nginx; systemctl start meshcore-weather-dispatch; curl --fail --max-time 15 -I http://127.0.0.1/ >/dev/null
+nginx -t; systemctl daemon-reload; systemctl reload nginx; systemctl start meshcore-weather-dispatch
+for attempt in $(seq 1 15); do curl --fail --max-time 2 -I http://127.0.0.1/ >/dev/null 2>&1 && break; sleep 1; done
+curl --fail --max-time 5 -I http://127.0.0.1/ >/dev/null
 trap - ERR; echo "Updated successfully. Backup: $BACKUP"

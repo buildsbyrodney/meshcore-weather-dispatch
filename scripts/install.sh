@@ -20,5 +20,7 @@ read -rp 'Administrator username [weatheradmin]: ' USER; USER=${USER:-weatheradm
 printf '%s\n' "$PASS" | "$APP/.venv/bin/python" -m dispatch.bootstrap --config "$ETC/config.yml" --environment "$ETC/environment" --database "$STATE/dispatch.sqlite3" --username "$USER" --email "$EMAIL" --states "$STATES" --password-stdin; unset PASS
 chown weatherdispatch:weatherdispatch "$ETC/config.yml" "$ETC/environment" "$STATE/dispatch.sqlite3"
 install -m 644 "$APP/systemd/meshcore-weather-dispatch.service" /etc/systemd/system/meshcore-weather-dispatch.service; install -m 644 "$APP/nginx/meshcore-weather-dispatch.conf" /etc/nginx/sites-available/meshcore-weather-dispatch; ln -s /etc/nginx/sites-available/meshcore-weather-dispatch /etc/nginx/sites-enabled/meshcore-weather-dispatch
-nginx -t; systemctl daemon-reload; systemctl enable --now nginx meshcore-weather-dispatch; curl --fail --max-time 15 -I http://127.0.0.1/ >/dev/null
+nginx -t; systemctl daemon-reload; systemctl enable --now nginx meshcore-weather-dispatch
+for attempt in $(seq 1 15); do curl --fail --max-time 2 -I http://127.0.0.1/ >/dev/null 2>&1 && break; sleep 1; done
+curl --fail --max-time 5 -I http://127.0.0.1/ >/dev/null
 echo "Installed: http://$(hostname -I | awk '{print $1}')/"
