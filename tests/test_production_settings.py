@@ -77,9 +77,9 @@ def test_manual_transmission_defaults_enabled_and_existing_setting_is_preserved(
 
 def test_release_version_is_used_in_the_nws_user_agent():
     metadata=tomllib.loads((Path(__file__).parents[1]/"pyproject.toml").read_text(encoding="utf-8"))
-    assert metadata["project"]["version"]=="1.0.0rc1"
-    assert VERSION=="1.0.0-rc.1"
-    assert user_agent("operator@example.org")=="MeshCoreWeatherDispatch/1.0.0-rc.1 (operator@example.org)"
+    assert metadata["project"]["version"]=="1.0.0rc2"
+    assert VERSION=="1.0.0-rc.2"
+    assert user_agent("operator@example.org")=="MeshCoreWeatherDispatch/1.0.0-rc.2 (operator@example.org)"
 
 def test_transmission_settings_show_manual_permission_and_readiness_requirements(tmp_path):
     app=create_app(cfg(tmp_path));db=app.extensions["db"]

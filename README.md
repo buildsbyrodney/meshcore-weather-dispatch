@@ -4,7 +4,7 @@ MeshCore Weather Dispatch is a small web console for a human operator to review 
 
 It monitors NWS alerts, but it **never transmits automatically**. Every weather or test message needs an authenticated administrator, an explicit action, and a final confirmation. A Companion accepting a command is recorded as radio acceptance; it is not proof of over-the-air delivery.
 
-Current release candidate: [`v1.0.0-rc.1`](docs/releases/v1.0.0-rc.1.md).
+Current release candidate: [`v1.0.0-rc.2`](docs/releases/v1.0.0-rc.2.md).
 
 ## Supported systems and hardware
 
