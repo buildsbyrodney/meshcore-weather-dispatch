@@ -106,3 +106,33 @@ def test_county_filters_change_computed_visibility_and_keep_hidden_selection(tmp
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+def test_transmission_statuses_and_checkbox_stay_compact_on_mobile(tmp_path,monkeypatch):
+    """The settings interlocks remain legible and the checkbox stays beside its label."""
+    if not find_library("nspr4"):
+        pytest.skip("Chromium runtime libraries are unavailable in this local environment")
+    monkeypatch.setenv("MESHCORE_SEND_ENABLED","0")
+    config=browser_config(tmp_path);config["dry_run"]=False
+    app=create_app(config);app.extensions["db"].save_setting("transmit_enabled","true")
+    server=make_server("127.0.0.1",0,app);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser=playwright.chromium.launch()
+            try:
+                context=browser.new_context(viewport={"width":375,"height":667});page=context.new_page()
+                page.goto(f"http://127.0.0.1:{server.server_port}/login")
+                page.fill('input[name="username"]',"admin");page.fill('input[name="password"]',"browser-password");page.click('button:has-text("Sign in")')
+                page.goto(f"http://127.0.0.1:{server.server_port}/settings")
+                assert page.locator(".transmission-status .interlock-status").count()==4
+                columns=page.locator(".transmission-status").evaluate("node => getComputedStyle(node).gridTemplateColumns.split(' ').length")
+                assert columns==2
+                checkbox=page.locator('.inline-check input[type="checkbox"]').bounding_box()
+                wording=page.locator(".inline-check span").bounding_box()
+                assert checkbox and wording and checkbox["x"] < wording["x"]
+                assert page.locator(".interlock-explanation").inner_text().startswith("Transmission is blocked:")
+                context.close()
+            finally:
+                browser.close()
+    finally:
+        server.shutdown();thread.join(timeout=5)
