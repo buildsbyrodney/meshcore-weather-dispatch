@@ -56,6 +56,17 @@ def test_alert_type_page_saves_selection_persists_and_audits(tmp_path):
     response=client.post("/settings/alert-types",data={"csrf_token":csrf(client),"action":"save","event":["Tornado Watch","Heat Advisory"]},follow_redirects=True)
     assert "Alert types saved: 2 enabled" in response.data.decode()
     assert runtime_config(app.config,db)["alert_types"]==["Heat Advisory","Tornado Watch"]
+
+
+def test_previous_selection_missing_from_refreshed_catalog_stays_visible_and_selectable(tmp_path):
+    app=create_app(config(tmp_path));db=app.extensions["db"];client=app.test_client();signed_in(client)
+    db.save_setting("nws_alert_types",json.dumps(["Retired Local Warning"]))
+    db.replace_alert_type_catalog(["Tornado Warning"],{"source":"test","retrieved_at":"now","version":"v2"})
+    page=client.get("/settings/alert-types").data.decode()
+    assert "Previously Configured" in page
+    assert 'value="Retired Local Warning" checked' in page
+    client.post("/settings/alert-types",data={"csrf_token":csrf(client),"action":"save","event":"Retired Local Warning"})
+    assert runtime_config(app.config,db)["alert_types"]==["Retired Local Warning"]
     assert db.history()[0]["action"]=="alert_types_saved" and db.history()[0]["actor"]=="admin"
     rejected=client.post("/settings/alert-types",data={"csrf_token":csrf(client),"action":"save","event":"Not an NWS event"},follow_redirects=True)
     assert "not in the available NWS catalog" in rejected.data.decode()

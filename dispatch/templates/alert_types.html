@@ -1,6 +1,6 @@
 {% extends 'base.html' %}{% block content %}
 <h1>Manage Alert Types</h1>
-<p class="muted">Choose the NWS alert event types Weather Dispatch monitors. Disabling an event type stops new alerts of that type from entering the dispatch queue; it does not alter alerts already recorded.</p>
+<p class="muted">Choose the NWS alert event types Weather Dispatch monitors. Disabling an event type stops new alerts of that type from entering the dispatch queue; it does not alter alerts already recorded. A previously selected type that NWS no longer lists remains visible until you deliberately remove it.</p>
 {% if has_catalog %}
 <details class="catalog-advanced"><summary>Advanced / Refresh NWS Alert Types</summary><p class="catalog-guidance">Catalog stored locally. Re-import only to refresh the official NWS event list. Source: {{catalog_meta.source}} · imported {{catalog_meta.retrieved_at}}{% if catalog_meta.version %} · {{catalog_meta.version}}{% endif %}</p><form method="post"><input type="hidden" name="csrf_token" value="{{csrf_token()}}"><input type="hidden" name="action" value="refresh"><button>Refresh official NWS catalog</button></form></details>
 {% else %}

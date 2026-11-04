@@ -176,6 +176,11 @@ def alert_types_page():
   groups={name:[row for row in catalog if row["category"]==name] for name in ("Warnings","Watches","Advisories","Other")}
   if not catalog:
    groups={name:[{"event":event,"category":name} for event in available if alert_type_category(event)==name] for name in ("Warnings","Watches","Advisories","Other")}
+  else:
+   # Never hide an operator's existing choice merely because NWS later changes
+   # its catalog. It remains explicitly selectable until the operator removes it.
+   previous=sorted(chosen-{row["event"] for row in catalog})
+   if previous: groups["Previously Configured"]=[{"event":event,"category":"Previously Configured"} for event in previous]
   return render_template("alert_types.html",groups=groups,selected=chosen,selected_count=len(chosen),catalog_meta=db.alert_type_catalog_meta(),has_catalog=bool(catalog))
  if request.method=="POST":
   action=request.form.get("action")
