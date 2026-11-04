@@ -107,6 +107,10 @@ For a real NWS warning, review the compact row and Details, select **Send**, ins
 
 ## Updates, backups, and recovery
 
+Administrators can also open **Settings → Software Updates**. It shows the installed version and Git commit, checks the configured Git repository for `main`, and retains the guarded updater's output while the application restarts. The page requires a separate explicit confirmation before an update or a Raspberry Pi reboot. It cannot accept a command, branch, URL, or package name from the browser.
+
+The update worker uses the same backup and rollback procedure as the command below. It restarts the application after a completed update but never reboots automatically. A reboot is sometimes necessary after an update - follow the instructions in the console.
+
 For a managed installation, run:
 
 ```bash

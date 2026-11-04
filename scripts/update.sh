@@ -15,7 +15,7 @@ else
  ss -ltnH '( sport = :80 )' | grep -q . && { echo 'Port 80 is occupied; cannot safely add Nginx. Existing service was left running.' >&2; exit 1; }
 fi
 runuser -u weatherdispatch -- git -C "$APP" fetch --prune origin; OLD=$(runuser -u weatherdispatch -- git -C "$APP" rev-parse HEAD)
-install -d -m 700 "$BACKUP" "$BACKUP/etc" "$BACKUP/systemd" "$BACKUP/nginx"
+install -d -m 700 "$BACKUP" "$BACKUP/etc" "$BACKUP/systemd" "$BACKUP/nginx" "$BACKUP/libexec" "$BACKUP/sudoers"
 [[ -f "$DB" ]] && python3 - "$DB" "$BACKUP/dispatch.sqlite3" <<'PY'
 import sqlite3,sys
 s,t=sys.argv[1:]; a=sqlite3.connect(s); b=sqlite3.connect(t)
@@ -24,8 +24,10 @@ finally: b.close(); a.close()
 PY
 for f in "$ETC/config.yml" "$ETC/environment"; do [[ -f "$f" ]] && cp -a "$f" "$BACKUP/etc/$(basename "$f")"; done
 cp -a /etc/systemd/system/meshcore-weather-dispatch.service "$BACKUP/systemd/service"; [[ -f /etc/nginx/sites-available/meshcore-weather-dispatch ]] && cp -a /etc/nginx/sites-available/meshcore-weather-dispatch "$BACKUP/nginx/site"
+for f in /usr/local/libexec/meshcore-weather-dispatch-update /usr/local/libexec/meshcore-weather-dispatch-reboot; do [[ -f "$f" ]] && cp -a "$f" "$BACKUP/libexec/$(basename "$f")"; done
+[[ -f /etc/sudoers.d/meshcore-weather-dispatch-web-updates ]] && cp -a /etc/sudoers.d/meshcore-weather-dispatch-web-updates "$BACKUP/sudoers/web-updates"
 runuser -u weatherdispatch -- sh -c 'cd "$1" && .venv/bin/pip freeze' sh "$APP" > "$BACKUP/pip-freeze.txt"
-rollback(){ echo "Update failed; restoring $OLD. Backups: $BACKUP" >&2; runuser -u weatherdispatch -- git -C "$APP" checkout -q "$OLD" || true; cp -a "$BACKUP/systemd/service" /etc/systemd/system/meshcore-weather-dispatch.service; [[ -f "$BACKUP/nginx/site" ]] && cp -a "$BACKUP/nginx/site" /etc/nginx/sites-available/meshcore-weather-dispatch; runuser -u weatherdispatch -- sh -c 'cd "$1" && .venv/bin/pip install -r "$2" && .venv/bin/pip install -e .' sh "$APP" "$BACKUP/pip-freeze.txt" || echo 'Python dependency rollback needs manual recovery; see pip-freeze.txt.' >&2; systemctl daemon-reload; nginx -t && systemctl reload nginx || true; systemctl start meshcore-weather-dispatch || true; }
+rollback(){ echo "Update failed; restoring $OLD. Backups: $BACKUP" >&2; runuser -u weatherdispatch -- git -C "$APP" checkout -q "$OLD" || true; cp -a "$BACKUP/systemd/service" /etc/systemd/system/meshcore-weather-dispatch.service; [[ -f "$BACKUP/nginx/site" ]] && cp -a "$BACKUP/nginx/site" /etc/nginx/sites-available/meshcore-weather-dispatch; for f in meshcore-weather-dispatch-update meshcore-weather-dispatch-reboot; do [[ -f "$BACKUP/libexec/$f" ]] && cp -a "$BACKUP/libexec/$f" "/usr/local/libexec/$f"; done; [[ -f "$BACKUP/sudoers/web-updates" ]] && cp -a "$BACKUP/sudoers/web-updates" /etc/sudoers.d/meshcore-weather-dispatch-web-updates; runuser -u weatherdispatch -- sh -c 'cd "$1" && .venv/bin/pip install -r "$2" && .venv/bin/pip install -e .' sh "$APP" "$BACKUP/pip-freeze.txt" || echo 'Python dependency rollback needs manual recovery; see pip-freeze.txt.' >&2; systemctl daemon-reload; nginx -t && systemctl reload nginx || true; systemctl start meshcore-weather-dispatch || true; }
 trap rollback ERR
 if ! command -v nginx >/dev/null; then apt-get update; apt-get install -y nginx; if [[ -e /etc/nginx/sites-enabled/default ]]; then target=$(readlink -f /etc/nginx/sites-enabled/default || true); [[ "$target" == /etc/nginx/sites-available/default ]] && grep -q 'Default server configuration' "$target" || { echo 'Existing Nginx site found; migration refused.' >&2; exit 1; }; rm /etc/nginx/sites-enabled/default; fi; fi
 systemctl stop meshcore-weather-dispatch
@@ -36,6 +38,7 @@ install -d -m 755 /usr/local/libexec
 install -m 755 "$APP/scripts/web-update-worker.sh" /usr/local/libexec/meshcore-weather-dispatch-update
 install -m 755 "$APP/scripts/web-reboot.sh" /usr/local/libexec/meshcore-weather-dispatch-reboot
 printf 'weatherdispatch ALL=(root) NOPASSWD: /usr/local/libexec/meshcore-weather-dispatch-update ""\nweatherdispatch ALL=(root) NOPASSWD: /usr/local/libexec/meshcore-weather-dispatch-reboot ""\n' | install -m 440 /dev/stdin /etc/sudoers.d/meshcore-weather-dispatch-web-updates
+visudo -cf /etc/sudoers.d/meshcore-weather-dispatch-web-updates
 [[ -e /etc/nginx/sites-enabled/meshcore-weather-dispatch && ! -L /etc/nginx/sites-enabled/meshcore-weather-dispatch ]] && { echo 'Managed Nginx link replaced; refusing overwrite.' >&2; exit 1; }
 install -m 644 "$APP/nginx/meshcore-weather-dispatch.conf" /etc/nginx/sites-available/meshcore-weather-dispatch; [[ -e /etc/nginx/sites-enabled/meshcore-weather-dispatch ]] || ln -s /etc/nginx/sites-available/meshcore-weather-dispatch /etc/nginx/sites-enabled/meshcore-weather-dispatch
 nginx -t; systemctl daemon-reload; systemctl reload nginx; systemctl start meshcore-weather-dispatch

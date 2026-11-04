@@ -17,3 +17,7 @@ def test_missing_managed_checkout_reports_unavailable_instead_of_crashing(monkey
  monkeypatch.setattr(updates,"APP","/path/that-does-not-exist")
  assert updates.installed()["commit"]=="unavailable"
  assert updates.available()["error"]=="Unable to check GitHub for updates."
+def test_update_endpoints_require_an_authenticated_csrf_session(tmp_path):
+ app=create_app(config(tmp_path,[]));client=app.test_client()
+ assert client.get('/settings/software-updates').status_code==302
+ assert client.post('/settings/software-updates/install',data={'confirm':'yes'}).status_code==400

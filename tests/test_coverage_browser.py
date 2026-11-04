@@ -252,3 +252,35 @@ def test_alert_type_selector_filters_counts_and_stays_usable_on_mobile(tmp_path)
                 browser.close()
     finally:
         server.shutdown();thread.join(timeout=5)
+
+def test_software_updates_page_is_compact_and_requires_confirmation(tmp_path, monkeypatch):
+    """The browser sees a fixed update UI, never a command-entry surface."""
+    if not find_library("nspr4"):
+        pytest.skip("Chromium runtime libraries are unavailable in this local environment")
+    app = create_app(browser_config(tmp_path))
+    monkeypatch.setattr("dispatch.routes.available_update", lambda: {"available": True, "commit": "a" * 40, "error": None})
+    server = make_server("127.0.0.1", 0, app)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            try:
+                context = browser.new_context(viewport={"width": 375, "height": 667})
+                page = context.new_page()
+                page.goto(f"http://127.0.0.1:{server.server_port}/login")
+                page.fill('input[name="username"]', "admin")
+                page.fill('input[name="password"]', "browser-password")
+                page.click('button:has-text("Sign in")')
+                page.goto(f"http://127.0.0.1:{server.server_port}/settings/software-updates")
+                assert page.get_by_text("A reboot is sometimes necessary after an update - follow the instructions in the console.").is_visible()
+                assert page.locator("#update-console").is_visible()
+                assert page.locator('input[name="confirm"]').count() == 2
+                assert page.locator('input[name="command"]').count() == 0
+                assert page.get_by_role("button", name="Install Update").is_disabled() is False
+                context.close()
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)

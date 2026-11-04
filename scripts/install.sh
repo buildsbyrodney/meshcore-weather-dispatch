@@ -52,6 +52,7 @@ install -d -m 755 /usr/local/libexec
 install -m 755 "$APP/scripts/web-update-worker.sh" /usr/local/libexec/meshcore-weather-dispatch-update
 install -m 755 "$APP/scripts/web-reboot.sh" /usr/local/libexec/meshcore-weather-dispatch-reboot
 printf 'weatherdispatch ALL=(root) NOPASSWD: /usr/local/libexec/meshcore-weather-dispatch-update ""\nweatherdispatch ALL=(root) NOPASSWD: /usr/local/libexec/meshcore-weather-dispatch-reboot ""\n' | install -m 440 /dev/stdin /etc/sudoers.d/meshcore-weather-dispatch-web-updates
+visudo -cf /etc/sudoers.d/meshcore-weather-dispatch-web-updates
 install -m 644 "$APP/systemd/meshcore-weather-dispatch.service" /etc/systemd/system/meshcore-weather-dispatch.service; install -m 644 "$APP/nginx/meshcore-weather-dispatch.conf" /etc/nginx/sites-available/meshcore-weather-dispatch; ln -s /etc/nginx/sites-available/meshcore-weather-dispatch /etc/nginx/sites-enabled/meshcore-weather-dispatch
 nginx -t; systemctl daemon-reload; systemctl enable --now nginx meshcore-weather-dispatch
 for attempt in $(seq 1 15); do curl --fail --max-time 2 -I http://127.0.0.1/ >/dev/null 2>&1 && break; sleep 1; done
