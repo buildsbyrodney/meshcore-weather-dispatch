@@ -3,7 +3,7 @@ import json, requests
 from uuid import uuid4
 from datetime import datetime, timezone
 from functools import wraps
-from flask import Blueprint, current_app, flash, redirect, render_template, request, session, url_for, jsonify
+from flask import Blueprint, current_app, flash, g, redirect, render_template, request, session, url_for, jsonify
 from werkzeug.security import check_password_hash, generate_password_hash
 from .auth import validate_password
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
@@ -21,9 +21,20 @@ bp=Blueprint("console",__name__)
 def admin(fn):
  @wraps(fn)
  def wrapped(*a,**kw):
-  if not session.get("user"): return redirect(url_for("console.login"))
+  user_id=session.get("user_id")
+  # Test fixtures from earlier releases used a username-only session.  Never
+  # accept that format in production: it could bind a stale session to a newly
+  # recreated username.  Real sessions always carry the immutable SQLite ID.
+  if user_id is None and current_app.config.get("TESTING"):
+   legacy=current_app.extensions["db"].user(session.get("user"),active_only=True)
+   user_id=legacy["id"] if legacy else None
+  user=current_app.extensions["db"].user_by_id(user_id,active_only=True) if user_id is not None else None
+  if not user:
+   session.clear();flash("Sign in with an active account.");return redirect(url_for("console.login"))
+  g.current_user=user
   return fn(*a,**kw)
  return wrapped
+def actor(): return g.current_user["username"]
 def saved_channel(db): return json.loads(db.setting("tx_channel") or "null")
 def app_timezone(db): return db.setting("timezone") or current_app.config.get("timezone") or system_timezone()
 def device_state(db):
@@ -49,9 +60,9 @@ def preview_signer(): return URLSafeTimedSerializer(current_app.config["SECRET_K
 @bp.route("/login",methods=["GET","POST"])
 def login():
  if request.method=="POST":
-  username,password_hash=current_app.extensions["db"].credentials()
-  if username and password_hash and request.form.get("username")==username and check_password_hash(password_hash,request.form.get("password", "")):
-   session.clear();session["user"]=request.form["username"];return redirect(url_for("console.index"))
+  user=current_app.extensions["db"].user(request.form.get("username",""),active_only=True)
+  if user and check_password_hash(user["password_hash"],request.form.get("password", "")):
+   session.clear();session["user_id"]=user["id"];return redirect(url_for("console.index"))
   flash("Invalid credentials")
  return render_template("login.html")
 @bp.post("/logout")
@@ -77,7 +88,7 @@ def ignore(cap_id):
  alert=db.get(cap_id)
  if preview.get("action")!="ignore" or preview.get("cap_id")!=cap_id or not alert or alert["status"]!="pending" or preview.get("updated_at")!=alert["updated_at"]: flash("No change: warning changed; review it again.");return redirect(url_for("console.index"))
  if not db.consume_preview(preview.get("jti", "")): flash("No change: this confirmation was already used; review the warning again.");return redirect(url_for("console.index"))
- if db.claim(cap_id,session["user"]): db.finish(cap_id,"ignored",session["user"])
+ if db.claim(cap_id,actor()): db.finish(cap_id,"ignored",actor())
  else: flash("Alert is no longer actionable.")
  return redirect(url_for("console.index"))
 @bp.post("/alerts/<cap_id>/ignore-preview")
@@ -100,7 +111,7 @@ def preview_transmit(cap_id):
 @bp.post("/alerts/<cap_id>/send")
 @admin
 def transmit(cap_id):
- db=current_app.extensions["db"];actor=session["user"];_,dev,status=device_state(db);channel=saved_channel(db)
+ db=current_app.extensions["db"];operator=actor();_,dev,status=device_state(db);channel=saved_channel(db)
  if request.form.get("confirm")!="yes": flash("No transmission: explicit confirmation is required.");return redirect(url_for("console.index"))
  try: preview=preview_signer().loads(request.form.get("preview_token",""),max_age=300)
  except (SignatureExpired,BadSignature): flash("No transmission: preview confirmation expired or is invalid.");return redirect(url_for("console.index"))
@@ -112,10 +123,10 @@ def transmit(cap_id):
  if not db.consume_preview(preview.get("jti", "")): flash("No transmission: this confirmation was already used; review the warning again.");return redirect(url_for("console.index"))
  try: verify_channel(dev,channel)
  except RadioError as exc: flash(f"No transmission: {status}. {exc}");return redirect(url_for("console.index"))
- if not db.claim(cap_id,actor): flash("Alert is no longer actionable.");return redirect(url_for("console.index"))
+ if not db.claim(cap_id,operator): flash("Alert is no longer actionable.");return redirect(url_for("console.index"))
  try:
-  detail=send(runtime_config(current_app.config,db),dev,channel,message);db.finish(cap_id,"sent",actor,detail,message);flash("Dispatch recorded. Radio acceptance is not proof of mesh delivery.")
- except RadioError as exc: db.finish(cap_id,"failed",actor,str(exc),message);flash(f"No transmission: {exc}")
+  detail=send(runtime_config(current_app.config,db),dev,channel,message);db.finish(cap_id,"sent",operator,detail,message);flash("Dispatch recorded. Radio acceptance is not proof of mesh delivery.")
+ except RadioError as exc: db.finish(cap_id,"failed",operator,str(exc),message);flash(f"No transmission: {exc}")
  return redirect(url_for("console.index"))
 @bp.route("/settings",methods=["GET","POST"])
 @admin
@@ -131,12 +142,12 @@ def settings():
   except RadioError as exc: channel_error=str(exc)
   try: radio_name=read_device_name(dev);db.save_setting("device_name",radio_name)
   except RadioError as exc: name_error=str(exc)
- return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,tx_enabled=cfg["transmit_enabled"],coverage_count=len(coverage),coverage_states=coverage_states,unsupported_coverage=unsupported,alert_type_count=len(cfg["alert_types"]),channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,radio_name=radio_name,cached_radio_name=cached_radio_name,name_error=name_error,timezones=valid_timezones(),timezone=app_timezone(db),nws_email=db.setting("nws_contact_email") or "",poll_seconds=cfg["poll_seconds"],nws_states=", ".join(cfg["states"]),admin_username=db.setting("auth_username") or "",web_tx_enabled=cfg["transmit_enabled"])
+ return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,tx_enabled=cfg["transmit_enabled"],coverage_count=len(coverage),coverage_states=coverage_states,unsupported_coverage=unsupported,alert_type_count=len(cfg["alert_types"]),channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,radio_name=radio_name,cached_radio_name=cached_radio_name,name_error=name_error,timezones=valid_timezones(),timezone=app_timezone(db),nws_email=db.setting("nws_contact_email") or "",poll_seconds=cfg["poll_seconds"],nws_states=", ".join(cfg["states"]),admin_username=actor(),web_tx_enabled=cfg["transmit_enabled"])
 @bp.post("/settings/account")
 @admin
 def account_settings():
- db=current_app.extensions["db"];username,password_hash=db.credentials();current=request.form.get("current_password","")
- if not password_hash or not check_password_hash(password_hash,current): flash("Account settings were not changed: current password is incorrect.");return redirect(url_for("console.settings"))
+ db=current_app.extensions["db"];user=g.current_user;username=user["username"];current=request.form.get("current_password","")
+ if not user or not check_password_hash(user["password_hash"],current): flash("Account settings were not changed: current password is incorrect.");return redirect(url_for("console.settings"))
  requested=request.form.get("username","").strip();new_password=request.form.get("new_password","");confirm=request.form.get("confirm_password","")
  try:
   if requested and (len(requested)<3 or len(requested)>64 or not requested.replace("_","").replace("-","").isalnum()): raise ValueError("username must be 3–64 letters, digits, hyphens, or underscores")
@@ -147,9 +158,68 @@ def account_settings():
    if new_password!=confirm: raise ValueError("new password confirmation does not match")
    values["auth_password_hash"]=generate_password_hash(new_password)
   if not values: raise ValueError("enter a new username or password")
-  db.save_settings(values);session.clear();db.audit(None,"administrator_account_changed",username,"credentials changed");flash("Account settings saved. Sign in again.")
+  db.update_user(user["id"],values.get("auth_username"),values.get("auth_password_hash"));session.clear();db.audit(None,"administrator_account_changed",username,"credentials changed");flash("Account settings saved. Sign in again.")
  except ValueError as exc: flash(f"Account settings were not changed: {exc}")
  return redirect(url_for("console.settings"))
+def valid_username(value):
+ value=value.strip()
+ if len(value)<3 or len(value)>64 or not value.replace("_","").replace("-","").isalnum(): raise ValueError("username must be 3–64 letters, digits, hyphens, or underscores")
+ return value
+@bp.get("/settings/users")
+@admin
+def users_page():
+ return render_template("users.html",users=current_app.extensions["db"].users(),current_user_id=g.current_user["id"])
+@bp.post("/settings/users/add")
+@admin
+def add_user():
+ db=current_app.extensions["db"]
+ try:
+  username=valid_username(request.form.get("username", ""));password=request.form.get("password","")
+  validate_password(password,"password")
+  if password!=request.form.get("confirm_password",""): raise ValueError("password confirmation does not match")
+  db.add_user(username,generate_password_hash(password));db.audit(None,"user_added",actor(),f"user={username}");flash(f"User {username} added.")
+ except ValueError as exc: flash(f"User was not added: {exc}")
+ return redirect(url_for("console.users_page"))
+@bp.post("/settings/users/edit")
+@admin
+def edit_user():
+ db=current_app.extensions["db"]
+ try:
+  target_id=int(request.form.get("target_id",""));target=db.user_by_id(target_id)
+  if not target: raise ValueError("user was not found")
+  new_username=valid_username(request.form.get("username", ""));password=request.form.get("password","")
+  if password:
+   validate_password(password,"password")
+   if password!=request.form.get("confirm_password",""): raise ValueError("password confirmation does not match")
+  db.update_user(target_id,new_username,generate_password_hash(password) if password else None)
+  db.audit(None,"user_updated",actor(),f"user={target['username']}; renamed={new_username!=target['username']}; password_changed={bool(password)}");flash(f"User {new_username} updated.")
+ except (TypeError,ValueError) as exc: flash(f"User was not updated: {exc}")
+ return redirect(url_for("console.users_page"))
+@bp.post("/settings/users/status")
+@admin
+def user_status():
+ db=current_app.extensions["db"];disable=request.form.get("disable")=="yes"
+ try:
+  target_id=int(request.form.get("target_id",""));target=db.user_by_id(target_id)
+  if not target: raise ValueError("user was not found")
+  db.set_user_disabled(target_id,disable);db.audit(None,"user_disabled" if disable else "user_enabled",actor(),f"user={target['username']}")
+  if disable and target_id==g.current_user["id"]: session.clear();flash("Your account was disabled. Sign in with another active account.");return redirect(url_for("console.login"))
+  flash(f"User {target['username']} {'disabled' if disable else 'enabled'}.")
+ except (TypeError,ValueError) as exc: flash(f"User status was not changed: {exc}")
+ return redirect(url_for("console.users_page"))
+@bp.post("/settings/users/remove")
+@admin
+def remove_user():
+ db=current_app.extensions["db"]
+ try:
+  if request.form.get("confirm")!="yes": raise ValueError("explicit confirmation is required")
+  target_id=int(request.form.get("target_id",""));target=db.user_by_id(target_id)
+  if not target: raise ValueError("user was not found")
+  db.remove_user(target_id);db.audit(None,"user_removed",actor(),f"user={target['username']}")
+  if target_id==g.current_user["id"]: session.clear();flash("Your account was removed.");return redirect(url_for("console.login"))
+  flash(f"User {target['username']} removed.")
+ except (TypeError,ValueError) as exc: flash(f"User was not removed: {exc}")
+ return redirect(url_for("console.users_page"))
 @bp.post("/settings/nws")
 @admin
 def nws_settings():
@@ -159,13 +229,13 @@ def nws_settings():
   if interval<60: raise ValueError("polling interval must be at least 60 seconds")
   retained=[row for row in db.coverage() if row["state"] not in selected]
   if retained and request.form.get("confirm_retained_counties")!="yes": raise ValueError(f"{len(retained)} selected county or counties remain outside the proposed polling states; confirm to keep them without monitoring them")
-  db.save_settings({"nws_contact_email":email,"nws_poll_seconds":str(interval),"nws_states":json.dumps(selected)});db.audit(None,"nws_settings_changed",session["user"],f"states={','.join(selected)} interval={interval}");flash("NWS settings saved. The next polling cycle will use them.")
+  db.save_settings({"nws_contact_email":email,"nws_poll_seconds":str(interval),"nws_states":json.dumps(selected)});db.audit(None,"nws_settings_changed",actor(),f"states={','.join(selected)} interval={interval}");flash("NWS settings saved. The next polling cycle will use them.")
  except (ValueError,TypeError) as exc: flash(f"NWS settings were not changed: {exc}")
  return redirect(url_for("console.settings"))
 @bp.post("/settings/transmission")
 @admin
 def transmission_settings():
- db=current_app.extensions["db"];enabled=request.form.get("transmit_enabled")=="yes";db.save_setting("transmit_enabled","true" if enabled else "false");db.audit(None,"transmission_setting_changed",session["user"],"enabled" if enabled else "disabled");flash("Manual transmission setting saved. Every message still requires explicit approval and confirmation.");return redirect(url_for("console.settings"))
+ db=current_app.extensions["db"];enabled=request.form.get("transmit_enabled")=="yes";db.save_setting("transmit_enabled","true" if enabled else "false");db.audit(None,"transmission_setting_changed",actor(),"enabled" if enabled else "disabled");flash("Manual transmission setting saved. Every message still requires explicit approval and confirmation.");return redirect(url_for("console.settings"))
 @bp.route("/settings/alert-types",methods=["GET","POST"])
 @admin
 def alert_types_page():
@@ -188,10 +258,10 @@ def alert_types_page():
    if action=="refresh":
     user_agent=runtime_config(current_app.config,db).get("nws_user_agent")
     if not user_agent: raise AlertTypeCatalogError("set a valid NWS contact email before refreshing the catalog")
-    events,meta=fetch_event_types(user_agent);db.replace_alert_type_catalog(events,meta);db.audit(None,"alert_type_catalog_imported",session["user"],f"{len(events)} event types; {meta['source']}");flash("Official NWS alert-type catalog refreshed. Enabled alert types were not changed.")
+    events,meta=fetch_event_types(user_agent);db.replace_alert_type_catalog(events,meta);db.audit(None,"alert_type_catalog_imported",actor(),f"{len(events)} event types; {meta['source']}");flash("Official NWS alert-type catalog refreshed. Enabled alert types were not changed.")
    elif action=="save":
     catalog=db.alert_type_catalog();available=sorted(set([row["event"] for row in catalog] or list(DEFAULT_ALERT_TYPES)) | set(runtime_config(current_app.config,db)["alert_types"]))
-    selected=request.form.getlist("event");db.save_alert_types(selected,available);db.audit(None,"alert_types_saved",session["user"],f"{len(set(selected))} alert types enabled");flash(f"Alert types saved: {len(set(selected))} enabled. Changes apply to the next poll.")
+    selected=request.form.getlist("event");db.save_alert_types(selected,available);db.audit(None,"alert_types_saved",actor(),f"{len(set(selected))} alert types enabled");flash(f"Alert types saved: {len(set(selected))} enabled. Changes apply to the next poll.")
    else: raise AlertTypeCatalogError("unknown alert-type action")
   except (AlertTypeCatalogError,ValueError,requests.RequestException) as exc:
    flash(f"Alert types were not changed: {exc}")
@@ -209,11 +279,11 @@ def coverage_counties_page():
   action=request.form.get("action");return_filters={"state":request.form.get("return_state",""),"q":request.form.get("return_query","")}
   try:
    if action=="import":
-    rows,meta=fetch_catalog(runtime_config(current_app.config,db)["nws_user_agent"]);db.replace_catalog(rows,meta);db.audit(None,"county_catalog_imported",session["user"],f"{len(rows)} counties; {meta['source']}");flash("County catalog imported. Coverage was not changed.")
+    rows,meta=fetch_catalog(runtime_config(current_app.config,db)["nws_user_agent"]);db.replace_catalog(rows,meta);db.audit(None,"county_catalog_imported",actor(),f"{len(rows)} counties; {meta['source']}");flash("County catalog imported. Coverage was not changed.")
    elif action=="save":
     selected=request.form.getlist("county")
     if len(selected)>25 and request.form.get("confirm_expand")!="yes": raise CatalogError("confirm this coverage expansion before saving")
-    db.save_coverage(selected,set(runtime_config(current_app.config,db)["states"]));db.audit(None,"coverage_counties_saved",session["user"],f"{len(selected)} counties selected");flash(f"Coverage saved: {len(selected)} counties.")
+    db.save_coverage(selected,set(runtime_config(current_app.config,db)["states"]));db.audit(None,"coverage_counties_saved",actor(),f"{len(selected)} counties selected");flash(f"Coverage saved: {len(selected)} counties.")
   except (CatalogError,ValueError,requests.RequestException) as exc:
    flash(f"Coverage was not changed: {exc}")
    if action=="save": return page(return_filters["state"],return_filters["q"],request.form.getlist("county"))
@@ -246,7 +316,7 @@ def select_channel():
  try:
   index=int(request.form.get("channel_index","-1"));channels=list_channels(dev);selected=next((c for c in channels if c["index"]==index),None)
   if not selected: raise RadioError("selected channel is unavailable; rescan the connected Companion")
-  db.save_setting("tx_channel",json.dumps(selected));db.audit(None,"tx_channel_selected",session["user"],f"{selected['name']} (slot {selected['index']})");flash(f"Transmit channel saved: {selected['name']}.")
+  db.save_setting("tx_channel",json.dumps(selected));db.audit(None,"tx_channel_selected",actor(),f"{selected['name']} (slot {selected['index']})");flash(f"Transmit channel saved: {selected['name']}.")
  except (ValueError,RadioError) as exc: flash(f"Channel not saved: {status}. {exc}")
  return redirect(url_for("console.settings"))
 @bp.post("/settings/channels/add")
@@ -256,7 +326,7 @@ def add_channel():
  try:
   if request.form.get("confirm") != "yes": raise RadioError("explicit confirmation is required")
   created=add_hashtag_channel(dev,int(request.form.get("slot","-1")),request.form.get("name",""))
-  db.audit(None,"channel_added",session["user"],f"{created['name']} (slot {created['index']})")
+  db.audit(None,"channel_added",actor(),f"{created['name']} (slot {created['index']})")
   # Existing saved TX choice must be rechecked after any configuration change.
   db.save_setting("tx_channel","null");flash(f"Added {created['name']} in slot {created['index']}. Re-select transmit channel before sending.")
  except (ValueError,RadioError) as exc: flash(f"Channel was not added: {status}. {exc}")
@@ -272,7 +342,7 @@ def remove_channel():
   # This keeps a crafted HTTP request from reaching any future adapter path.
   if name.strip().casefold() in {"public","#public"}: raise RadioError("Public channel is protected from deletion")
   if selected and selected.get("index")==slot: raise RadioError("deselect the current transmit channel before deleting it")
-  delete_channel(dev,slot,name);db.audit(None,"channel_deleted",session["user"],f"device={dev.get('stable_path') or dev.get('device')}; channel={name}; slot={slot}");flash(f"Deleted {name} from slot {slot}.")
+  delete_channel(dev,slot,name);db.audit(None,"channel_deleted",actor(),f"device={dev.get('stable_path') or dev.get('device')}; channel={name}; slot={slot}");flash(f"Deleted {name} from slot {slot}.")
  except (ValueError,RadioError) as exc: flash(f"Channel was not deleted: {status}. {exc}")
  return redirect(url_for("console.settings"))
 @bp.post("/settings/device-name")
@@ -293,8 +363,8 @@ def test_messaging():
   elif request.form.get("confirm")!="yes": flash("Test message not sent: confirmation required.")
   else:
    try:
-    verify_channel(dev,channel);detail=send(runtime_config(current_app.config,db),dev,channel,message);db.test_message(session["user"],channel,message,"accepted",detail);flash(f"Test result: accepted. {detail}")
-   except RadioError as exc: db.test_message(session["user"],channel or {"name":"none","index":-1},message,"failed",str(exc));flash(f"Test message failed: {status}. {exc}")
+    verify_channel(dev,channel);detail=send(runtime_config(current_app.config,db),dev,channel,message);db.test_message(actor(),channel,message,"accepted",detail);flash(f"Test result: accepted. {detail}")
+   except RadioError as exc: db.test_message(actor(),channel or {"name":"none","index":-1},message,"failed",str(exc));flash(f"Test message failed: {status}. {exc}")
  return render_template("test_messaging.html",channel=channel,device_name=db.setting("device_name") or "unknown",status=status,cap=message_limit(current_app.config),history=db.test_history(),enabled=bool(channel and dev and transmissions_enabled(current_app.config,db)))
 @bp.route("/test-alerts",methods=["GET","POST"])
 @admin
@@ -306,7 +376,7 @@ def test_alerts():
    # Reuse the real eligibility, shortening, expiry, and manual-dispatch path.
    # This route never contacts NWS or the Companion.
    if not eligible(feature,cfg): raise TestAlertError("synthetic warning does not match configured coverage")
-   ingest(current_app,[feature]); db.audit(feature["properties"]["id"],"test_alert_created",session["user"],"TEST ONLY synthetic warning created")
+   ingest(current_app,[feature]); db.audit(feature["properties"]["id"],"test_alert_created",actor(),"TEST ONLY synthetic warning created")
    flash("TEST ONLY warning created. It is awaiting the normal manual Send to Mesh or Ignore decision.")
    return redirect(url_for("console.index"))
   except TestAlertError as exc: flash(f"TEST ONLY warning was not created: {exc}")

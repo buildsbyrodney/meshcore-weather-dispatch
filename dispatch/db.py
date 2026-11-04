@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS audit (
 );
 CREATE INDEX IF NOT EXISTS idx_alert_status ON alerts(status, sent DESC);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL COLLATE NOCASE UNIQUE, password_hash TEXT NOT NULL, disabled INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS test_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT, channel_name TEXT, channel_index INTEGER, message TEXT, outcome TEXT, detail TEXT, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS county_catalog (ugc TEXT PRIMARY KEY, state TEXT NOT NULL, name TEXT NOT NULL, same TEXT NOT NULL UNIQUE);
 CREATE TABLE IF NOT EXISTS coverage_counties (ugc TEXT PRIMARY KEY, state TEXT NOT NULL, name TEXT NOT NULL, same TEXT NOT NULL UNIQUE, selected_at TEXT NOT NULL);
@@ -53,6 +54,48 @@ class Database:
             for key,value in values.items():
                 if value: c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)",(key,value))
     def credentials(self): return self.setting("auth_username"),self.setting("auth_password_hash")
+    def migrate_users(self):
+        """Copy the legacy singleton only when no user rows exist."""
+        with self.connect() as c:
+            if c.execute("SELECT 1 FROM users LIMIT 1").fetchone(): return
+            username,password_hash=self.credentials()
+            if username and password_hash:
+                c.execute("INSERT INTO users(username,password_hash,created_at,updated_at) VALUES(?,?,?,?)",(username,password_hash,now(),now()))
+    def user(self, username, active_only=False):
+        with self.connect() as c:
+            return c.execute("SELECT * FROM users WHERE username=?" + (" AND disabled=0" if active_only else ""),(username,)).fetchone()
+    def user_by_id(self, user_id, active_only=False):
+        with self.connect() as c:
+            return c.execute("SELECT * FROM users WHERE id=?" + (" AND disabled=0" if active_only else ""),(user_id,)).fetchone()
+    def users(self):
+        with self.connect() as c:
+            return c.execute("SELECT id,username,disabled,created_at,updated_at FROM users ORDER BY username COLLATE NOCASE").fetchall()
+    def active_user_count(self):
+        with self.connect() as c:return c.execute("SELECT COUNT(*) FROM users WHERE disabled=0").fetchone()[0]
+    def add_user(self, username, password_hash):
+        with self.connect() as c:
+            try: c.execute("INSERT INTO users(username,password_hash,created_at,updated_at) VALUES(?,?,?,?)",(username,password_hash,now(),now()))
+            except sqlite3.IntegrityError: raise ValueError("that username is already in use")
+    def update_user(self, user_id, username=None, password_hash=None):
+        with self.connect() as c:
+            row=c.execute("SELECT * FROM users WHERE id=?",(user_id,)).fetchone()
+            if not row: raise ValueError("user was not found")
+            username=username or row["username"];password_hash=password_hash or row["password_hash"]
+            try: c.execute("UPDATE users SET username=?,password_hash=?,updated_at=? WHERE id=?",(username,password_hash,now(),row["id"]))
+            except sqlite3.IntegrityError: raise ValueError("that username is already in use")
+    def set_user_disabled(self, user_id, disabled):
+        with self.connect() as c:
+            c.execute("BEGIN IMMEDIATE");row=c.execute("SELECT * FROM users WHERE id=?",(user_id,)).fetchone()
+            if not row: c.execute("ROLLBACK");raise ValueError("user was not found")
+            if bool(row["disabled"])==bool(disabled): c.execute("ROLLBACK");return
+            if disabled and not row["disabled"] and c.execute("SELECT COUNT(*) FROM users WHERE disabled=0").fetchone()[0]<=1: c.execute("ROLLBACK");raise ValueError("cannot disable the last active account")
+            c.execute("UPDATE users SET disabled=?,updated_at=? WHERE id=?",(int(disabled),now(),row["id"]));c.execute("COMMIT")
+    def remove_user(self, user_id):
+        with self.connect() as c:
+            c.execute("BEGIN IMMEDIATE");row=c.execute("SELECT * FROM users WHERE id=?",(user_id,)).fetchone()
+            if not row: c.execute("ROLLBACK");raise ValueError("user was not found")
+            if not row["disabled"] and c.execute("SELECT COUNT(*) FROM users WHERE disabled=0").fetchone()[0]<=1: c.execute("ROLLBACK");raise ValueError("cannot remove the last active account")
+            c.execute("DELETE FROM users WHERE id=?",(row["id"],));c.execute("COMMIT")
     def audit(self, cap_id, action, actor=None, detail=None, message=None):
         with self.connect() as c:
             c.execute("INSERT INTO audit(cap_id,action,actor,detail,message,created_at) VALUES(?,?,?,?,?,?)", (cap_id, action, actor, detail, message, now()))

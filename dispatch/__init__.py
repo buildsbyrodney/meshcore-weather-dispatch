@@ -47,6 +47,7 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.jinja_env.filters["compacttime"] = lambda value: compact_local_time(value, app.extensions["db"].setting("timezone") or app.config.get("timezone") or system_timezone())
     app.extensions["db"].initialize()
     app.extensions["db"].bootstrap_operational_settings(config)
+    app.extensions["db"].migrate_users()
     app.extensions["db"].migrate_coverage(config_rows(app.config.get("counties",[])))
     app.config["coverage_db"]=app.extensions["db"]
     csrf.init_app(app)

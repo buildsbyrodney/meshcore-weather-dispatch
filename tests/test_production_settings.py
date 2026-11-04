@@ -51,14 +51,14 @@ def test_account_change_requires_current_password_and_rehashes(tmp_path):
     client.post("/settings/account",data={"csrf_token":token(client),"username":"newadmin","current_password":"wrong","new_password":"new-password-long","confirm_password":"new-password-long"})
     assert db.credentials()[0]=="admin"
     client.post("/settings/account",data={"csrf_token":token(client),"username":"newadmin","current_password":"current-password","new_password":"new-password-long","confirm_password":"new-password-long"})
-    username,password_hash=db.credentials();assert username=="newadmin" and check_password_hash(password_hash,"new-password-long")
+    user=db.user("newadmin",active_only=True);assert user and check_password_hash(user["password_hash"],"new-password-long")
 
 def test_account_password_mismatch_is_rejected_and_simple_six_character_password_is_accepted(tmp_path):
     app=create_app(cfg(tmp_path));db=app.extensions["db"];client=app.test_client();signed_in(client)
     response=client.post("/settings/account",data={"csrf_token":token(client),"username":"admin","current_password":"current-password","new_password":"simple","confirm_password":"different"},follow_redirects=True)
     assert "confirmation does not match" in response.data.decode() and check_password_hash(db.credentials()[1],"current-password")
     client.post("/settings/account",data={"csrf_token":token(client),"username":"admin","current_password":"current-password","new_password":"simple","confirm_password":"simple"})
-    assert check_password_hash(db.credentials()[1],"simple")
+    assert check_password_hash(db.user("admin",active_only=True)["password_hash"],"simple")
 
 def test_unconfigured_new_install_never_polls_all_states(tmp_path,monkeypatch):
     fresh=cfg(tmp_path);fresh.pop("states");fresh.pop("nws_user_agent")

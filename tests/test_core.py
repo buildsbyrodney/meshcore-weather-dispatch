@@ -302,6 +302,7 @@ def test_channel_selection_persists_name_and_slot(tmp_path,monkeypatch):
  monkeypatch.setattr("dispatch.routes.read_device_name",lambda dev:"WXALERT")
  monkeypatch.setattr("dispatch.routes.discover_channels",lambda dev:{"capacity":4,"slots":[{"index":2,"name":"#wx-northal","occupied":True,"known":True}]})
  monkeypatch.setattr("dispatch.routes.list_channels",lambda dev:[{"index":2,"name":"#wx-northal"}])
+ monkeypatch.setattr("dispatch.routes.read_device_name",lambda dev:"WXALERT")
  token=client.get("/settings").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
  assert client.post("/settings/channel",data={"csrf_token":token,"channel_index":"2"}).status_code==302
  assert app.extensions["db"].setting("tx_channel")=="{\"index\": 2, \"name\": \"#wx-northal\"}"
@@ -318,6 +319,7 @@ def test_channel_discovery_and_connection_errors_are_safe(tmp_path,monkeypatch):
  monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({}, {"device":"/dev/ttyACM0"}, "Connected"))
  monkeypatch.setattr("dispatch.routes.read_device_name",lambda dev:"WXALERT")
  monkeypatch.setattr("dispatch.routes.discover_channels",lambda dev: (_ for _ in ()).throw(RadioError("serial permission denied")))
+ monkeypatch.setattr("dispatch.routes.read_device_name",lambda dev:"WXALERT")
  page=client.get("/settings").data.decode(); assert "serial permission denied" in page
  monkeypatch.setattr("dispatch.routes.scan_devices",lambda:[])
  assert "options_html" in client.get("/api/devices").get_json()
@@ -367,6 +369,7 @@ def test_channel_add_requires_confirmation_and_clears_tx(tmp_path,monkeypatch):
  monkeypatch.setattr("dispatch.routes.read_device_name",lambda dev:"WXALERT")
  monkeypatch.setattr("dispatch.routes.discover_channels",lambda dev:{"capacity":4,"slots":[{"index":2,"name":"","occupied":False,"known":True}]})
  monkeypatch.setattr("dispatch.routes.add_hashtag_channel",lambda d,s,n:{"index":s,"name":n})
+ monkeypatch.setattr("dispatch.routes.read_device_name",lambda dev:"WXALERT")
  token=client.get("/settings").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
  client.post("/settings/channels/add",data={"csrf_token":token,"slot":"2","name":"#new"})
  assert db.setting("tx_channel") is not None
@@ -383,6 +386,7 @@ def test_channel_delete_protects_tx_and_confirms(tmp_path,monkeypatch):
  monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/x","stable_path":"/dev/by-id/x"},"Connected"))
  monkeypatch.setattr("dispatch.routes.read_device_name",lambda dev:"WXALERT")
  monkeypatch.setattr("dispatch.routes.discover_channels",lambda dev:{"capacity":4,"slots":[]})
+ monkeypatch.setattr("dispatch.routes.read_device_name",lambda dev:"WXALERT")
  token=client.get("/settings").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
  called=[];monkeypatch.setattr("dispatch.routes.delete_channel",lambda *a:called.append(a))
  client.post("/settings/channels/delete",data={"csrf_token":token,"slot":"2","name":"#wx","confirm":"yes"})
@@ -421,6 +425,7 @@ def test_device_name_change_is_explicit_and_persists(tmp_path,monkeypatch):
  monkeypatch.setattr("dispatch.routes.read_device_name",lambda dev:"WXALERT")
  monkeypatch.setattr("dispatch.routes.discover_channels",lambda d:{"capacity":4,"slots":[]})
  monkeypatch.setattr("dispatch.routes.set_device_name",lambda d,n:n)
+ monkeypatch.setattr("dispatch.routes.read_device_name",lambda dev:"WXALERT")
  token=client.get("/settings").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
  response=client.post("/settings/device-name",data={"csrf_token":token,"name":"WXALERT"},follow_redirects=True)
  assert db.setting("device_name")=="WXALERT"
@@ -474,6 +479,7 @@ def test_channel_delete_requires_server_confirmation_and_stale_data_is_safe(tmp_
  monkeypatch.setattr("dispatch.routes.device_state",lambda db: ({},{"device":"/dev/x","stable_path":"/dev/by-id/x"},"Connected"))
  monkeypatch.setattr("dispatch.routes.read_device_name",lambda dev:"WXALERT")
  monkeypatch.setattr("dispatch.routes.discover_channels",lambda dev:{"capacity":4,"slots":[]})
+ monkeypatch.setattr("dispatch.routes.read_device_name",lambda dev:"WXALERT")
  token=client.get("/settings").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
  called=[];monkeypatch.setattr("dispatch.routes.delete_channel",lambda *a:called.append(a))
  client.post("/settings/channels/delete",data={"csrf_token":token,"slot":"1","name":"#owe-wx-test"})
@@ -632,7 +638,7 @@ def test_catalog_refresh_preserves_selected_coverage(tmp_path,monkeypatch):
 
 def test_transmission_setting_is_audited_and_never_opens_radio(tmp_path,monkeypatch):
  app=create_app(config(tmp_path));client=app.test_client()
- with client.session_transaction() as s:s["user"]="admin"
+ with client.session_transaction() as s:s["user_id"]=app.extensions["db"].user("admin")["id"]
  monkeypatch.setattr("dispatch.routes.send",lambda *args: (_ for _ in ()).throw(AssertionError("settings must not send")))
  client.post("/settings/transmission",data={"csrf_token":csrf_token(client),"transmit_enabled":"yes"})
  assert app.extensions["db"].setting("transmit_enabled")=="true"
@@ -661,7 +667,7 @@ def test_startup_poll_test_alert_and_settings_never_open_radio(tmp_path,monkeypa
   def json(self): return {"features":[]}
  monkeypatch.setattr("dispatch.poller.requests.get",lambda *args,**kwargs: Response())
  fetch(app)
- with client.session_transaction() as s:s["user"]="admin"
+ with client.session_transaction() as s:s["user_id"]=db.user("admin")["id"]
  client.post("/settings/transmission",data={"csrf_token":csrf_token(client),"transmit_enabled":"yes"})
  choice=coverage_counties(app.config)[0]
  token=client.get("/test-alerts").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
