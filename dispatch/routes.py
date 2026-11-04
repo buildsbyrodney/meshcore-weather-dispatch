@@ -21,7 +21,8 @@ bp=Blueprint("console",__name__)
 def admin(fn):
  @wraps(fn)
  def wrapped(*a,**kw):
-  if not session.get("user"): return redirect(url_for("console.login"))
+  if not session.get("user") or not current_app.extensions["db"].user(session["user"],active_only=True):
+   session.clear();flash("Sign in with an active account.");return redirect(url_for("console.login"))
   return fn(*a,**kw)
  return wrapped
 def saved_channel(db): return json.loads(db.setting("tx_channel") or "null")
@@ -49,9 +50,9 @@ def preview_signer(): return URLSafeTimedSerializer(current_app.config["SECRET_K
 @bp.route("/login",methods=["GET","POST"])
 def login():
  if request.method=="POST":
-  username,password_hash=current_app.extensions["db"].credentials()
-  if username and password_hash and request.form.get("username")==username and check_password_hash(password_hash,request.form.get("password", "")):
-   session.clear();session["user"]=request.form["username"];return redirect(url_for("console.index"))
+  user=current_app.extensions["db"].user(request.form.get("username",""),active_only=True)
+  if user and check_password_hash(user["password_hash"],request.form.get("password", "")):
+   session.clear();session["user"]=user["username"];return redirect(url_for("console.index"))
   flash("Invalid credentials")
  return render_template("login.html")
 @bp.post("/logout")
@@ -135,8 +136,8 @@ def settings():
 @bp.post("/settings/account")
 @admin
 def account_settings():
- db=current_app.extensions["db"];username,password_hash=db.credentials();current=request.form.get("current_password","")
- if not password_hash or not check_password_hash(password_hash,current): flash("Account settings were not changed: current password is incorrect.");return redirect(url_for("console.settings"))
+ db=current_app.extensions["db"];username=session["user"];user=db.user(username,active_only=True);current=request.form.get("current_password","")
+ if not user or not check_password_hash(user["password_hash"],current): flash("Account settings were not changed: current password is incorrect.");return redirect(url_for("console.settings"))
  requested=request.form.get("username","").strip();new_password=request.form.get("new_password","");confirm=request.form.get("confirm_password","")
  try:
   if requested and (len(requested)<3 or len(requested)>64 or not requested.replace("_","").replace("-","").isalnum()): raise ValueError("username must be 3–64 letters, digits, hyphens, or underscores")
@@ -147,9 +148,63 @@ def account_settings():
    if new_password!=confirm: raise ValueError("new password confirmation does not match")
    values["auth_password_hash"]=generate_password_hash(new_password)
   if not values: raise ValueError("enter a new username or password")
-  db.save_settings(values);session.clear();db.audit(None,"administrator_account_changed",username,"credentials changed");flash("Account settings saved. Sign in again.")
+  db.update_user(username,values.get("auth_username"),values.get("auth_password_hash"));db.save_settings(values);session.clear();db.audit(None,"administrator_account_changed",username,"credentials changed");flash("Account settings saved. Sign in again.")
  except ValueError as exc: flash(f"Account settings were not changed: {exc}")
  return redirect(url_for("console.settings"))
+def valid_username(value):
+ value=value.strip()
+ if len(value)<3 or len(value)>64 or not value.replace("_","").replace("-","").isalnum(): raise ValueError("username must be 3–64 letters, digits, hyphens, or underscores")
+ return value
+@bp.get("/settings/users")
+@admin
+def users_page():
+ return render_template("users.html",users=current_app.extensions["db"].users(),current_user=session["user"])
+@bp.post("/settings/users/add")
+@admin
+def add_user():
+ db=current_app.extensions["db"]
+ try:
+  username=valid_username(request.form.get("username", ""));password=request.form.get("password","")
+  validate_password(password,"password")
+  if password!=request.form.get("confirm_password",""): raise ValueError("password confirmation does not match")
+  db.add_user(username,generate_password_hash(password));db.audit(None,"user_added",session["user"],f"user={username}");flash(f"User {username} added.")
+ except ValueError as exc: flash(f"User was not added: {exc}")
+ return redirect(url_for("console.users_page"))
+@bp.post("/settings/users/edit")
+@admin
+def edit_user():
+ db=current_app.extensions["db"];target=request.form.get("target","")
+ try:
+  new_username=valid_username(request.form.get("username", ""));password=request.form.get("password","")
+  if password:
+   validate_password(password,"password")
+   if password!=request.form.get("confirm_password",""): raise ValueError("password confirmation does not match")
+  db.update_user(target,new_username,generate_password_hash(password) if password else None)
+  if target==session["user"]: session["user"]=new_username
+  db.audit(None,"user_updated",session["user"],f"user={target}; renamed={new_username!=target}; password_changed={bool(password)}");flash(f"User {new_username} updated.")
+ except ValueError as exc: flash(f"User was not updated: {exc}")
+ return redirect(url_for("console.users_page"))
+@bp.post("/settings/users/status")
+@admin
+def user_status():
+ db=current_app.extensions["db"];target=request.form.get("target","");disable=request.form.get("disable")=="yes"
+ try:
+  db.set_user_disabled(target,disable);db.audit(None,"user_disabled" if disable else "user_enabled",session["user"],f"user={target}")
+  if disable and target==session["user"]: session.clear();flash("Your account was disabled. Sign in with another active account.");return redirect(url_for("console.login"))
+  flash(f"User {target} {'disabled' if disable else 'enabled'}.")
+ except ValueError as exc: flash(f"User status was not changed: {exc}")
+ return redirect(url_for("console.users_page"))
+@bp.post("/settings/users/remove")
+@admin
+def remove_user():
+ db=current_app.extensions["db"];target=request.form.get("target","")
+ try:
+  if request.form.get("confirm")!="yes": raise ValueError("explicit confirmation is required")
+  db.remove_user(target);db.audit(None,"user_removed",session["user"],f"user={target}")
+  if target==session["user"]: session.clear();flash("Your account was removed.");return redirect(url_for("console.login"))
+  flash(f"User {target} removed.")
+ except ValueError as exc: flash(f"User was not removed: {exc}")
+ return redirect(url_for("console.users_page"))
 @bp.post("/settings/nws")
 @admin
 def nws_settings():

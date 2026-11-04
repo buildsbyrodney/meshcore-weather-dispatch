@@ -133,6 +133,27 @@ def test_manual_transmission_setting_stays_compact_on_mobile(tmp_path):
         server.shutdown();thread.join(timeout=5)
 
 
+def test_manage_users_page_is_usable_on_mobile(tmp_path):
+    if not find_library("nspr4"):
+        pytest.skip("Chromium runtime libraries are unavailable in this local environment")
+    app=create_app(browser_config(tmp_path));db=app.extensions["db"]
+    db.add_user("operator",generate_password_hash("operator-password"))
+    server=make_server("127.0.0.1",0,app);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser=playwright.chromium.launch()
+            try:
+                page=browser.new_page(viewport={"width":375,"height":667})
+                page.goto(f"http://127.0.0.1:{server.server_port}/login")
+                page.fill('input[name="username"]',"admin");page.fill('input[name="password"]',"browser-password");page.click('button:has-text("Sign in")')
+                page.goto(f"http://127.0.0.1:{server.server_port}/settings/users")
+                assert page.get_by_role("heading",name="Manage Users").is_visible()
+                assert page.get_by_text("operator",exact=True).is_visible()
+                assert page.locator('input[name="username"]').last().bounding_box()["width"] > 100
+            finally: browser.close()
+    finally: server.shutdown();thread.join(timeout=5)
+
+
 def test_test_message_confirmation_checkbox_stays_inline_on_desktop_and_mobile(tmp_path):
     """The test-message confirmation uses the shared inline checkbox layout."""
     if not find_library("nspr4"):
