@@ -143,12 +143,12 @@ def settings():
   except RadioError as exc: channel_error=str(exc)
   try: radio_name=read_device_name(dev);db.save_setting("device_name",radio_name)
   except RadioError as exc: name_error=str(exc)
- return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,tx_enabled=cfg["transmit_enabled"],coverage_count=len(coverage),coverage_states=coverage_states,unsupported_coverage=unsupported,alert_type_count=len(cfg["alert_types"]),channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,radio_name=radio_name,cached_radio_name=cached_radio_name,name_error=name_error,timezones=valid_timezones(),timezone=app_timezone(db),nws_email=db.setting("nws_contact_email") or "",poll_seconds=cfg["poll_seconds"],nws_states=", ".join(cfg["states"]),admin_username=actor(),web_tx_enabled=cfg["transmit_enabled"])
+ return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,tx_enabled=cfg["transmit_enabled"],coverage_count=len(coverage),coverage_states=coverage_states,unsupported_coverage=unsupported,alert_type_count=len(cfg["alert_types"]),channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,radio_name=radio_name,cached_radio_name=cached_radio_name,name_error=name_error,timezones=valid_timezones(),timezone=app_timezone(db),nws_email=db.setting("nws_contact_email") or "",poll_seconds=cfg["poll_seconds"],nws_states=", ".join(cfg["states"]),web_tx_enabled=cfg["transmit_enabled"])
 @bp.post("/settings/account")
 @admin
 def account_settings():
  db=current_app.extensions["db"];user=g.current_user;username=user["username"];current=request.form.get("current_password","")
- if not user or not check_password_hash(user["password_hash"],current): flash("Account settings were not changed: current password is incorrect.");return redirect(url_for("console.settings"))
+ if not user or not check_password_hash(user["password_hash"],current): flash("Account settings were not changed: current password is incorrect.");return redirect(url_for("console.users_page"))
  requested=request.form.get("username","").strip();new_password=request.form.get("new_password","");confirm=request.form.get("confirm_password","")
  try:
   if requested and (len(requested)<3 or len(requested)>64 or not requested.replace("_","").replace("-","").isalnum()): raise ValueError("username must be 3–64 letters, digits, hyphens, or underscores")
@@ -161,7 +161,7 @@ def account_settings():
   if not values: raise ValueError("enter a new username or password")
   db.update_user(user["id"],values.get("auth_username"),values.get("auth_password_hash"));session.clear();db.audit(None,"administrator_account_changed",username,"credentials changed");flash("Account settings saved. Sign in again.")
  except ValueError as exc: flash(f"Account settings were not changed: {exc}")
- return redirect(url_for("console.settings"))
+ return redirect(url_for("console.users_page"))
 def valid_username(value):
  value=value.strip()
  if len(value)<3 or len(value)>64 or not value.replace("_","").replace("-","").isalnum(): raise ValueError("username must be 3–64 letters, digits, hyphens, or underscores")
@@ -169,7 +169,7 @@ def valid_username(value):
 @bp.get("/settings/users")
 @admin
 def users_page():
- return render_template("users.html",users=current_app.extensions["db"].users(),current_user_id=g.current_user["id"])
+ return render_template("users.html",users=current_app.extensions["db"].users(),current_user_id=g.current_user["id"],current_username=actor())
 @bp.post("/settings/users/add")
 @admin
 def add_user():
@@ -188,6 +188,7 @@ def edit_user():
  try:
   target_id=int(request.form.get("target_id",""));target=db.user_by_id(target_id)
   if not target: raise ValueError("user was not found")
+  if target_id==g.current_user["id"]: raise ValueError("use My Account to change your own username or password")
   new_username=valid_username(request.form.get("username", ""));password=request.form.get("password","")
   if password:
    validate_password(password,"password")
