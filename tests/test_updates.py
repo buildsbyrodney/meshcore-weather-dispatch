@@ -6,7 +6,9 @@ def test_update_and_reboot_require_confirmation_and_use_fixed_helper(tmp_path,mo
  calls=[];app=create_app(config(tmp_path,calls));client=app.test_client()
  with client.session_transaction() as s:s['user_id']=app.extensions['db'].user('admin')['id']
  monkeypatch.setattr('dispatch.routes.available_update',lambda:{'available':True,'commit':'next','error':None})
- assert b'A reboot is sometimes necessary after an update - follow the instructions in the console.' in client.get('/settings/software-updates').data
+ page=client.get('/settings/software-updates').data.decode()
+ assert 'A reboot is sometimes necessary after an update - follow the instructions in the console.' in page
+ assert page.index('Reboot Raspberry Pi') < page.index('A reboot is sometimes necessary after an update - follow the instructions in the console.')
  client.post('/settings/software-updates/install',data={'csrf_token':token(client)})
  assert not calls
  client.post('/settings/software-updates/install',data={'csrf_token':token(client),'confirm':'yes'})
