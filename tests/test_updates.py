@@ -1,5 +1,6 @@
 from dispatch import create_app
 from dispatch import updates
+import subprocess
 def config(tmp_path, calls): return {"TESTING":True,"secret_key":"test","database":str(tmp_path/"u.sqlite"),"admin_username":"admin","admin_password_hash":"scrypt:32768:8:1$X$C8YciwLCAazhj6PeXTvoUHl0LTB7qm4JzB47lqYsOiwD9sEzKJzQx9QHdT1yTQ","nws_user_agent":"x@example.org","states":["AL"],"counties":[],"max_message_bytes":80,"poll_seconds":60,"start_poller":False,"update_helper":lambda action:calls.append(action),"update_state_dir":str(tmp_path/"updates")}
 def token(client): return client.get('/settings/software-updates').data.decode().split('name="csrf_token" value="')[1].split('"')[0]
 def test_update_and_reboot_require_confirmation_and_use_fixed_helper(tmp_path,monkeypatch):
@@ -19,6 +20,13 @@ def test_missing_managed_checkout_reports_unavailable_instead_of_crashing(monkey
  monkeypatch.setattr(updates,"APP","/path/that-does-not-exist")
  assert updates.installed()["commit"]=="unavailable"
  assert updates.available()["error"]=="Unable to check GitHub for updates."
+def test_production_helper_invocation_uses_only_fixed_no_argument_commands(monkeypatch):
+ calls=[]
+ def fixed(args,cwd=None):
+  calls.append((args,cwd));return subprocess.CompletedProcess(args,0,"","")
+ monkeypatch.setattr(updates,"_run",fixed)
+ updates.launch({});updates.launch({},reboot=True)
+ assert calls==[(["sudo","-n",updates.UPDATE_HELPER],"/"),(["sudo","-n",updates.REBOOT_HELPER],"/")]
 def test_update_endpoints_require_an_authenticated_csrf_session(tmp_path):
  app=create_app(config(tmp_path,[]));client=app.test_client()
  assert client.get('/settings/software-updates').status_code==302
