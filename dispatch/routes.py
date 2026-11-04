@@ -15,6 +15,7 @@ from .poller import ingest, eligible, coverage_counties
 from .test_alerts import build_test_alert, TestAlertError
 from .coverage import fetch_catalog, CatalogError
 from .runtime import runtime_config, transmissions_enabled, contact_email, states
+from .alert_types import DEFAULT_ALERT_TYPES, category as alert_type_category, fetch_event_types, AlertTypeCatalogError
 
 bp=Blueprint("console",__name__)
 def admin(fn):
@@ -130,7 +131,7 @@ def settings():
   except RadioError as exc: channel_error=str(exc)
   try: radio_name=read_device_name(dev);db.save_setting("device_name",radio_name)
   except RadioError as exc: name_error=str(exc)
- return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,tx_enabled=cfg["transmit_enabled"],coverage_count=len(coverage),coverage_states=coverage_states,unsupported_coverage=unsupported,channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,radio_name=radio_name,cached_radio_name=cached_radio_name,name_error=name_error,timezones=valid_timezones(),timezone=app_timezone(db),nws_email=db.setting("nws_contact_email") or "",poll_seconds=cfg["poll_seconds"],nws_states=", ".join(cfg["states"]),admin_username=db.setting("auth_username") or "",web_tx_enabled=cfg["transmit_enabled"])
+ return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,tx_enabled=cfg["transmit_enabled"],coverage_count=len(coverage),coverage_states=coverage_states,unsupported_coverage=unsupported,alert_type_count=len(cfg["alert_types"]),channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,radio_name=radio_name,cached_radio_name=cached_radio_name,name_error=name_error,timezones=valid_timezones(),timezone=app_timezone(db),nws_email=db.setting("nws_contact_email") or "",poll_seconds=cfg["poll_seconds"],nws_states=", ".join(cfg["states"]),admin_username=db.setting("auth_username") or "",web_tx_enabled=cfg["transmit_enabled"])
 @bp.post("/settings/account")
 @admin
 def account_settings():
@@ -165,6 +166,38 @@ def nws_settings():
 @admin
 def transmission_settings():
  db=current_app.extensions["db"];enabled=request.form.get("transmit_enabled")=="yes";db.save_setting("transmit_enabled","true" if enabled else "false");db.audit(None,"transmission_setting_changed",session["user"],"enabled" if enabled else "disabled");flash("Manual transmission setting saved. Every message still requires explicit approval and confirmation.");return redirect(url_for("console.settings"))
+@bp.route("/settings/alert-types",methods=["GET","POST"])
+@admin
+def alert_types_page():
+ db=current_app.extensions["db"]
+ def page(selected=None):
+  cfg=runtime_config(current_app.config,db);catalog=db.alert_type_catalog();available=sorted(set([row["event"] for row in catalog] or list(DEFAULT_ALERT_TYPES)) | set(cfg["alert_types"]))
+  chosen=set(cfg["alert_types"] if selected is None else selected)
+  groups={name:[row for row in catalog if row["category"]==name] for name in ("Warnings","Watches","Advisories","Other")}
+  if not catalog:
+   groups={name:[{"event":event,"category":name} for event in available if alert_type_category(event)==name] for name in ("Warnings","Watches","Advisories","Other")}
+  else:
+   # Never hide an operator's existing choice merely because NWS later changes
+   # its catalog. It remains explicitly selectable until the operator removes it.
+   previous=sorted(chosen-{row["event"] for row in catalog})
+   if previous: groups["Previously Configured"]=[{"event":event,"category":"Previously Configured"} for event in previous]
+  return render_template("alert_types.html",groups=groups,selected=chosen,selected_count=len(chosen),catalog_meta=db.alert_type_catalog_meta(),has_catalog=bool(catalog))
+ if request.method=="POST":
+  action=request.form.get("action")
+  try:
+   if action=="refresh":
+    user_agent=runtime_config(current_app.config,db).get("nws_user_agent")
+    if not user_agent: raise AlertTypeCatalogError("set a valid NWS contact email before refreshing the catalog")
+    events,meta=fetch_event_types(user_agent);db.replace_alert_type_catalog(events,meta);db.audit(None,"alert_type_catalog_imported",session["user"],f"{len(events)} event types; {meta['source']}");flash("Official NWS alert-type catalog refreshed. Enabled alert types were not changed.")
+   elif action=="save":
+    catalog=db.alert_type_catalog();available=sorted(set([row["event"] for row in catalog] or list(DEFAULT_ALERT_TYPES)) | set(runtime_config(current_app.config,db)["alert_types"]))
+    selected=request.form.getlist("event");db.save_alert_types(selected,available);db.audit(None,"alert_types_saved",session["user"],f"{len(set(selected))} alert types enabled");flash(f"Alert types saved: {len(set(selected))} enabled. Changes apply to the next poll.")
+   else: raise AlertTypeCatalogError("unknown alert-type action")
+  except (AlertTypeCatalogError,ValueError,requests.RequestException) as exc:
+   flash(f"Alert types were not changed: {exc}")
+   if action=="save": return page(request.form.getlist("event"))
+  return redirect(url_for("console.alert_types_page"))
+ return page()
 @bp.route("/settings/coverage-counties",methods=["GET","POST"])
 @admin
 def coverage_counties_page():
@@ -266,18 +299,18 @@ def test_messaging():
 @bp.route("/test-alerts",methods=["GET","POST"])
 @admin
 def test_alerts():
- db=current_app.extensions["db"]; counties=coverage_counties(current_app.config)
+ db=current_app.extensions["db"];cfg=runtime_config(current_app.config,db); counties=coverage_counties(cfg)
  if request.method=="POST":
   try:
-   feature=build_test_alert(current_app.config,request.form.getlist("county"),request.form.get("event",""))
+   feature=build_test_alert(cfg,request.form.getlist("county"),request.form.get("event",""))
    # Reuse the real eligibility, shortening, expiry, and manual-dispatch path.
    # This route never contacts NWS or the Companion.
-   if not eligible(feature,current_app.config): raise TestAlertError("synthetic warning does not match configured coverage")
+   if not eligible(feature,cfg): raise TestAlertError("synthetic warning does not match configured coverage")
    ingest(current_app,[feature]); db.audit(feature["properties"]["id"],"test_alert_created",session["user"],"TEST ONLY synthetic warning created")
    flash("TEST ONLY warning created. It is awaiting the normal manual Send to Mesh or Ignore decision.")
    return redirect(url_for("console.index"))
   except TestAlertError as exc: flash(f"TEST ONLY warning was not created: {exc}")
- return render_template("test_alerts.html",counties=counties,alert_types=current_app.config.get("alert_types",[]))
+ return render_template("test_alerts.html",counties=counties,alert_types=runtime_config(current_app.config,current_app.extensions["db"])["alert_types"])
 @bp.post("/settings/test")
 @admin
 def test_device():

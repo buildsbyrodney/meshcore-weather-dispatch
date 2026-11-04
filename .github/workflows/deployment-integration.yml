@@ -72,6 +72,7 @@ jobs:
           db.replace_catalog([{'ugc':'ALC089','state':'AL','name':'Madison','same':'001089'}],{'source':'ci'})
           db.save_coverage(['ALC089'],{'AL'})
           db.save_setting('tx_channel','{"index":1,"name":"#ci"}')
+          assert 'Tornado Warning' in __import__('json').loads(db.setting('nws_alert_types'))
           PY
           curl -fsS -b /tmp/cookies -c /tmp/cookies "$base/test-alerts" -o /tmp/test-alerts.html
           csrf=$(sed -n 's/.*name="csrf_token" value="\([^"]*\)".*/\1/p' /tmp/test-alerts.html | head -1)
@@ -173,7 +174,7 @@ jobs:
           EOF
           sudo -u weatherdispatch /opt/meshcore-weather-dispatch/.venv/bin/python - <<'PY'
           from dispatch.db import Database
-          db=Database('/var/lib/meshcore-weather-dispatch/dispatch.sqlite3'); db.initialize(); db.bootstrap_operational_settings({'admin_username':'ciadmin','admin_password_hash':'scrypt:32768:8:1$X$C8YciwLCAazhj6PeXTvoUHl0LTB7qm4JzB47lqYsOiwD9sEzKJzQx9QHdT1yTQ','states':['AL'],'nws_user_agent':'MeshCoreWeatherDispatch/0.1 ci@example.invalid','poll_seconds':60,'transmit_enabled':False}); db.replace_catalog([{'ugc':'ALC089','state':'AL','name':'Madison','same':'001089'}],{'source':'legacy'}); db.save_coverage(['ALC089']); db.save_setting('device','{"stable_path":"/dev/null"}'); db.save_setting('tx_channel','{"index":1,"name":"#ci"}')
+          db=Database('/var/lib/meshcore-weather-dispatch/dispatch.sqlite3'); db.initialize(); db.bootstrap_operational_settings({'admin_username':'ciadmin','admin_password_hash':'scrypt:32768:8:1$X$C8YciwLCAazhj6PeXTvoUHl0LTB7qm4JzB47lqYsOiwD9sEzKJzQx9QHdT1yTQ','states':['AL'],'nws_user_agent':'MeshCoreWeatherDispatch/0.1 ci@example.invalid','poll_seconds':60,'alert_types':['Tornado Warning'],'transmit_enabled':False}); db.replace_catalog([{'ugc':'ALC089','state':'AL','name':'Madison','same':'001089'}],{'source':'legacy'}); db.save_coverage(['ALC089']); db.save_setting('device','{"stable_path":"/dev/null"}'); db.save_setting('tx_channel','{"index":1,"name":"#ci"}')
           PY
           sudo systemctl daemon-reload; sudo systemctl enable --now meshcore-weather-dispatch
       - name: Migrate legacy installation and verify durable state
@@ -188,7 +189,7 @@ jobs:
           test "$before_secret" = "$(sudo sha256sum /etc/meshcore-weather-dispatch/environment | cut -d' ' -f1)"
           sudo -u weatherdispatch /opt/meshcore-weather-dispatch/.venv/bin/python - <<'PY'
           from dispatch.db import Database
-          db=Database('/var/lib/meshcore-weather-dispatch/dispatch.sqlite3'); assert db.coverage() and db.setting('device') and db.setting('tx_channel'); assert db.setting('transmit_enabled')=='false'
+          db=Database('/var/lib/meshcore-weather-dispatch/dispatch.sqlite3'); assert db.coverage() and db.setting('device') and db.setting('tx_channel'); assert db.setting('transmit_enabled')=='false'; assert __import__('json').loads(db.setting('nws_alert_types'))==['Tornado Warning']
           PY
           sudo test -d /var/backups/meshcore-weather-dispatch
           sudo -E bash "$GITHUB_WORKSPACE/scripts/update.sh"

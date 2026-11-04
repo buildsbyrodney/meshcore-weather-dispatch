@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS test_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, 
 CREATE TABLE IF NOT EXISTS county_catalog (ugc TEXT PRIMARY KEY, state TEXT NOT NULL, name TEXT NOT NULL, same TEXT NOT NULL UNIQUE);
 CREATE TABLE IF NOT EXISTS coverage_counties (ugc TEXT PRIMARY KEY, state TEXT NOT NULL, name TEXT NOT NULL, same TEXT NOT NULL UNIQUE, selected_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS catalog_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS alert_type_catalog (event TEXT PRIMARY KEY, category TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS alert_type_catalog_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS dispatch_previews (jti TEXT PRIMARY KEY, consumed_at TEXT NOT NULL);
 '''
 
@@ -42,7 +44,9 @@ class Database:
             c.execute("CREATE INDEX IF NOT EXISTS idx_alert_family ON alerts(family_id, created_at)")
     def bootstrap_operational_settings(self, config):
         """Seed web-managed values once; never overwrite an operator's changes."""
-        values={"auth_username":config.get("admin_username", ""),"auth_password_hash":config.get("admin_password_hash", ""),"nws_states":json.dumps(config.get("states",[])),"nws_poll_seconds":str(max(60,int(config.get("poll_seconds",60)))),"transmit_enabled":"true" if config.get("transmit_enabled",True) else "false"}
+        from .alert_types import DEFAULT_ALERT_TYPES
+        legacy_alerts=config.get("alert_types", DEFAULT_ALERT_TYPES)
+        values={"auth_username":config.get("admin_username", ""),"auth_password_hash":config.get("admin_password_hash", ""),"nws_states":json.dumps(config.get("states",[])),"nws_poll_seconds":str(max(60,int(config.get("poll_seconds",60)))),"nws_alert_types":json.dumps(legacy_alerts),"transmit_enabled":"true" if config.get("transmit_enabled",True) else "false"}
         candidate=str(config.get("nws_user_agent","")).rsplit(" ",1)[-1].strip("() ")
         if "@" in candidate: values["nws_contact_email"]=candidate
         with self.connect() as c:
@@ -132,3 +136,28 @@ class Database:
         if rows:
             with self.connect() as c:c.executemany("INSERT OR IGNORE INTO coverage_counties VALUES(?,?,?,?,?)",[(r["ugc"],r["state"],r["name"],r["same"],now()) for r in rows])
         self.save_setting("coverage_migrated","1")
+    def alert_type_catalog(self):
+        with self.connect() as c:
+            return c.execute("SELECT event,category FROM alert_type_catalog ORDER BY category,event").fetchall()
+    def alert_type_catalog_meta(self):
+        with self.connect() as c:
+            return {r[0]:r[1] for r in c.execute("SELECT key,value FROM alert_type_catalog_metadata")}
+    def replace_alert_type_catalog(self, events, metadata):
+        if not events: raise ValueError("empty alert-type catalog")
+        from .alert_types import category
+        with self.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            c.execute("CREATE TEMP TABLE incoming_alert_types(event TEXT PRIMARY KEY,category TEXT NOT NULL)")
+            c.executemany("INSERT INTO incoming_alert_types VALUES(?,?)",[(event,category(event)) for event in events])
+            c.execute("DELETE FROM alert_type_catalog")
+            c.execute("INSERT INTO alert_type_catalog SELECT event,category FROM incoming_alert_types")
+            c.execute("DROP TABLE incoming_alert_types")
+            c.execute("DELETE FROM alert_type_catalog_metadata")
+            c.executemany("INSERT INTO alert_type_catalog_metadata VALUES(?,?)",metadata.items())
+            c.execute("COMMIT")
+    def save_alert_types(self, events, allowed_events):
+        cleaned=sorted({str(event).strip() for event in events if str(event).strip()})
+        allowed=set(allowed_events)
+        if any(event not in allowed for event in cleaned):
+            raise ValueError("one or more alert types are not in the available NWS catalog")
+        self.save_setting("nws_alert_types",json.dumps(cleaned))

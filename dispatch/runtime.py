@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json, re
 from .version import VERSION
+from .alert_types import DEFAULT_ALERT_TYPES
 
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 STATE = re.compile(r"^[A-Z]{2}$")
@@ -23,6 +24,14 @@ def _json(value, fallback):
     try: return json.loads(value) if value is not None else fallback
     except (TypeError, ValueError): return fallback
 
+def alert_types(value, fallback=DEFAULT_ALERT_TYPES) -> list[str]:
+    """Normalize operator selections; a malformed persisted value fails closed."""
+    if value is None:
+        value=fallback
+    if not isinstance(value, (list, tuple)):
+        return []
+    return sorted({str(event).strip() for event in value if isinstance(event,str) and str(event).strip()})
+
 def runtime_config(config: dict, db) -> dict:
     """Read dynamic choices on demand; service-managed config is never web writable."""
     out=dict(config)
@@ -33,6 +42,15 @@ def runtime_config(config: dict, db) -> dict:
     email=db.setting("nws_contact_email")
     if email:
         out["nws_user_agent"]=user_agent(email)
+    saved_alert_types=db.setting("nws_alert_types")
+    if saved_alert_types is None:
+        out["alert_types"]=alert_types(None,config.get("alert_types",DEFAULT_ALERT_TYPES))
+    else:
+        try:
+            out["alert_types"]=alert_types(json.loads(saved_alert_types))
+        except (TypeError, ValueError):
+            # A corrupted persisted selection must never broaden monitoring.
+            out["alert_types"]=[]
     out["transmit_enabled"]=(db.setting("transmit_enabled") or "false").lower()=="true"
     return out
 

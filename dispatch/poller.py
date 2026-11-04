@@ -52,6 +52,10 @@ def normalize_geo_code(value: str) -> str:
 def eligible(feature, cfg):
     p=feature["properties"]
     if p.get("event") not in cfg.get("alert_types", []): return False
+    return geographically_eligible(feature,cfg)
+
+def geographically_eligible(feature, cfg):
+    p=feature["properties"]
     counties=configured_counties(cfg)
     # An empty selected coverage list is fail-closed; it never means all counties.
     if not counties: return False
@@ -59,6 +63,19 @@ def eligible(feature, cfg):
     # A null/missing geometry is immaterial: no polygon parsing is performed.
     codes={normalize_geo_code(str(code)) for code in (geocode.get("SAME") or [])+(geocode.get("UGC") or [])}
     return bool(codes & set(counties))
+
+def related_to_existing_alert(db, feature) -> bool:
+    """Keep CAP revisions/cancellations for an existing family after deselection.
+
+    Operators stop *new* alert types by deselecting them. A later CAP revision or
+    cancellation still needs to close the already-recorded family safely.
+    """
+    props=feature.get("properties") or {}
+    references=cap_reference_ids(props.get("references"))
+    if not references:
+        return False
+    with db.connect() as c:
+        return bool(c.execute("SELECT 1 FROM alerts WHERE cap_id IN (%s) AND test_only=0 LIMIT 1" % ",".join("?"*len(references)),references).fetchone())
 
 def content_fingerprint(props: dict) -> str:
     """Stable comparison that deliberately excludes alert ID, CAP references and sent time."""
@@ -122,7 +139,15 @@ def fetch(app):
     try:
         response=requests.get(NWS, params=params, headers={"User-Agent":cfg["nws_user_agent"],"Accept":"application/geo+json"}, timeout=15)
         response.raise_for_status(); data=response.json()
-        ingest(app,[f for f in data.get("features",[]) if eligible(f,cfg)])
+        features=[]
+        for feature in data.get("features",[]):
+            known_family=related_to_existing_alert(app.extensions["db"],feature)
+            # A CAP cancellation/revision can omit geographic codes.  Once a
+            # family was legitimately ingested, keep applying its lifecycle
+            # updates even if the operator later deselects the event type.
+            if known_family or eligible(feature,cfg):
+                features.append(feature)
+        ingest(app,features)
         app.extensions["db"].save_setting("nws_last_success",now())
         app.extensions["db"].save_setting("nws_last_error","")
     except Exception as exc:

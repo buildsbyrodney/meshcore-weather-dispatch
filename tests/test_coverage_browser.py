@@ -196,3 +196,38 @@ def test_channel_and_other_checkbox_controls_stay_inline_on_desktop_and_mobile(t
                 browser.close()
     finally:
         server.shutdown();thread.join(timeout=5)
+
+
+def test_alert_type_selector_filters_counts_and_stays_usable_on_mobile(tmp_path):
+    """Alert choices are searchable, grouped, and have usable controls at Pi widths."""
+    if not find_library("nspr4"):
+        pytest.skip("Chromium runtime libraries are unavailable in this local environment")
+    app=create_app(browser_config(tmp_path));db=app.extensions["db"]
+    db.replace_alert_type_catalog(
+        ["Tornado Warning","Tornado Watch","Heat Advisory","Special Weather Statement"],
+        {"source":"browser test","retrieved_at":"now","version":"test"},
+    )
+    server=make_server("127.0.0.1",0,app);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser=playwright.chromium.launch()
+            try:
+                for width in (1280,375):
+                    context=browser.new_context(viewport={"width":width,"height":667});page=context.new_page()
+                    page.goto(f"http://127.0.0.1:{server.server_port}/login")
+                    page.fill('input[name="username"]',"admin");page.fill('input[name="password"]',"browser-password");page.click('button:has-text("Sign in")')
+                    page.goto(f"http://127.0.0.1:{server.server_port}/settings/alert-types")
+                    assert page.get_by_text("Warnings",exact=True).is_visible()
+                    assert page.get_by_text("Watches",exact=True).is_visible()
+                    page.fill("#alert-type-search","Watch")
+                    assert page.locator('.alert-type-choice:has-text("Tornado Watch")').evaluate("row => getComputedStyle(row).display") != "none"
+                    assert page.locator('.alert-type-choice:has-text("Tornado Warning")').evaluate("row => getComputedStyle(row).display") == "none"
+                    page.click("#clear-all-alert-types")
+                    assert page.locator("#enabled-count").inner_text()=="0"
+                    page.click("#select-all-alert-types")
+                    assert page.locator("#enabled-count").inner_text()=="4"
+                    context.close()
+            finally:
+                browser.close()
+    finally:
+        server.shutdown();thread.join(timeout=5)
