@@ -174,7 +174,7 @@ jobs:
           EOF
           sudo -u weatherdispatch /opt/meshcore-weather-dispatch/.venv/bin/python - <<'PY'
           from dispatch.db import Database
-          db=Database('/var/lib/meshcore-weather-dispatch/dispatch.sqlite3'); db.initialize(); db.bootstrap_operational_settings({'admin_username':'ciadmin','admin_password_hash':'scrypt:32768:8:1$X$C8YciwLCAazhj6PeXTvoUHl0LTB7qm4JzB47lqYsOiwD9sEzKJzQx9QHdT1yTQ','states':['AL'],'nws_user_agent':'MeshCoreWeatherDispatch/0.1 ci@example.invalid','poll_seconds':60,'transmit_enabled':False}); db.replace_catalog([{'ugc':'ALC089','state':'AL','name':'Madison','same':'001089'}],{'source':'legacy'}); db.save_coverage(['ALC089']); db.save_setting('device','{"stable_path":"/dev/null"}'); db.save_setting('tx_channel','{"index":1,"name":"#ci"}')
+          db=Database('/var/lib/meshcore-weather-dispatch/dispatch.sqlite3'); db.initialize(); db.bootstrap_operational_settings({'admin_username':'ciadmin','admin_password_hash':'scrypt:32768:8:1$X$C8YciwLCAazhj6PeXTvoUHl0LTB7qm4JzB47lqYsOiwD9sEzKJzQx9QHdT1yTQ','states':['AL'],'nws_user_agent':'MeshCoreWeatherDispatch/0.1 ci@example.invalid','poll_seconds':60,'alert_types':['Tornado Warning'],'transmit_enabled':False}); db.replace_catalog([{'ugc':'ALC089','state':'AL','name':'Madison','same':'001089'}],{'source':'legacy'}); db.save_coverage(['ALC089']); db.save_setting('device','{"stable_path":"/dev/null"}'); db.save_setting('tx_channel','{"index":1,"name":"#ci"}')
           PY
           sudo systemctl daemon-reload; sudo systemctl enable --now meshcore-weather-dispatch
       - name: Migrate legacy installation and verify durable state
