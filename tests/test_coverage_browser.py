@@ -149,7 +149,7 @@ def test_manage_users_page_is_usable_on_mobile(tmp_path):
                 page.goto(f"http://127.0.0.1:{server.server_port}/settings/users")
                 assert page.get_by_role("heading",name="Manage Users").is_visible()
                 assert page.get_by_text("operator",exact=True).is_visible()
-                assert page.locator('input[name="username"]').last().bounding_box()["width"] > 100
+                assert page.locator('input[name="username"]').last.bounding_box()["width"] > 100
             finally: browser.close()
     finally: server.shutdown();thread.join(timeout=5)
 

@@ -64,6 +64,9 @@ class Database:
     def user(self, username, active_only=False):
         with self.connect() as c:
             return c.execute("SELECT * FROM users WHERE username=?" + (" AND disabled=0" if active_only else ""),(username,)).fetchone()
+    def user_by_id(self, user_id, active_only=False):
+        with self.connect() as c:
+            return c.execute("SELECT * FROM users WHERE id=?" + (" AND disabled=0" if active_only else ""),(user_id,)).fetchone()
     def users(self):
         with self.connect() as c:
             return c.execute("SELECT id,username,disabled,created_at,updated_at FROM users ORDER BY username COLLATE NOCASE").fetchall()
@@ -73,23 +76,23 @@ class Database:
         with self.connect() as c:
             try: c.execute("INSERT INTO users(username,password_hash,created_at,updated_at) VALUES(?,?,?,?)",(username,password_hash,now(),now()))
             except sqlite3.IntegrityError: raise ValueError("that username is already in use")
-    def update_user(self, target, username=None, password_hash=None):
+    def update_user(self, user_id, username=None, password_hash=None):
         with self.connect() as c:
-            row=c.execute("SELECT * FROM users WHERE username=?",(target,)).fetchone()
+            row=c.execute("SELECT * FROM users WHERE id=?",(user_id,)).fetchone()
             if not row: raise ValueError("user was not found")
             username=username or row["username"];password_hash=password_hash or row["password_hash"]
             try: c.execute("UPDATE users SET username=?,password_hash=?,updated_at=? WHERE id=?",(username,password_hash,now(),row["id"]))
             except sqlite3.IntegrityError: raise ValueError("that username is already in use")
-    def set_user_disabled(self, target, disabled):
+    def set_user_disabled(self, user_id, disabled):
         with self.connect() as c:
-            c.execute("BEGIN IMMEDIATE");row=c.execute("SELECT * FROM users WHERE username=?",(target,)).fetchone()
+            c.execute("BEGIN IMMEDIATE");row=c.execute("SELECT * FROM users WHERE id=?",(user_id,)).fetchone()
             if not row: c.execute("ROLLBACK");raise ValueError("user was not found")
             if bool(row["disabled"])==bool(disabled): c.execute("ROLLBACK");return
             if disabled and not row["disabled"] and c.execute("SELECT COUNT(*) FROM users WHERE disabled=0").fetchone()[0]<=1: c.execute("ROLLBACK");raise ValueError("cannot disable the last active account")
             c.execute("UPDATE users SET disabled=?,updated_at=? WHERE id=?",(int(disabled),now(),row["id"]));c.execute("COMMIT")
-    def remove_user(self, target):
+    def remove_user(self, user_id):
         with self.connect() as c:
-            c.execute("BEGIN IMMEDIATE");row=c.execute("SELECT * FROM users WHERE username=?",(target,)).fetchone()
+            c.execute("BEGIN IMMEDIATE");row=c.execute("SELECT * FROM users WHERE id=?",(user_id,)).fetchone()
             if not row: c.execute("ROLLBACK");raise ValueError("user was not found")
             if not row["disabled"] and c.execute("SELECT COUNT(*) FROM users WHERE disabled=0").fetchone()[0]<=1: c.execute("ROLLBACK");raise ValueError("cannot remove the last active account")
             c.execute("DELETE FROM users WHERE id=?",(row["id"],));c.execute("COMMIT")
