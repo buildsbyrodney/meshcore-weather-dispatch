@@ -638,7 +638,7 @@ def test_catalog_refresh_preserves_selected_coverage(tmp_path,monkeypatch):
 
 def test_transmission_setting_is_audited_and_never_opens_radio(tmp_path,monkeypatch):
  app=create_app(config(tmp_path));client=app.test_client()
- with client.session_transaction() as s:s["user"]="admin"
+ with client.session_transaction() as s:s["user_id"]=app.extensions["db"].user("admin")["id"]
  monkeypatch.setattr("dispatch.routes.send",lambda *args: (_ for _ in ()).throw(AssertionError("settings must not send")))
  client.post("/settings/transmission",data={"csrf_token":csrf_token(client),"transmit_enabled":"yes"})
  assert app.extensions["db"].setting("transmit_enabled")=="true"
@@ -667,7 +667,7 @@ def test_startup_poll_test_alert_and_settings_never_open_radio(tmp_path,monkeypa
   def json(self): return {"features":[]}
  monkeypatch.setattr("dispatch.poller.requests.get",lambda *args,**kwargs: Response())
  fetch(app)
- with client.session_transaction() as s:s["user"]="admin"
+ with client.session_transaction() as s:s["user_id"]=db.user("admin")["id"]
  client.post("/settings/transmission",data={"csrf_token":csrf_token(client),"transmit_enabled":"yes"})
  choice=coverage_counties(app.config)[0]
  token=client.get("/test-alerts").data.decode().split('name="csrf_token" value="')[1].split('"')[0]
