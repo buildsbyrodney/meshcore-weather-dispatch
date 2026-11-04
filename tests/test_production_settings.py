@@ -89,3 +89,9 @@ def test_transmission_settings_show_manual_permission_and_readiness_requirements
     assert "Allow Manual Transmissions" in page
     assert 'class="inline-check"' in page
     assert "dry-run" not in page.lower() and "interlock" not in page.lower()
+
+def test_settings_promotes_sqlite_backed_alert_type_selection(tmp_path):
+    app=create_app(cfg(tmp_path));client=app.test_client();signed_in(client)
+    page=client.get("/settings").data.decode()
+    assert "Alert Types" in page and "1</b> alert types enabled" in page
+    assert 'href="/settings/alert-types"' in page

@@ -69,9 +69,10 @@ The Gunicorn listener must be `127.0.0.1:8080`, not a LAN-facing address.
 
 1. Visit the installer’s LAN URL and sign in.
 2. In **Settings → NWS Monitoring**, confirm the contact email, polling interval (at least 60 seconds), and state codes. The contact is included in the NWS User-Agent.
-3. In **Settings → Coverage Counties**, import the official NWS county catalog once, then select and explicitly save the counties to monitor. County selection is stored in SQLite; an empty selection is fail-closed and does not mean “all counties.”
-4. Set the application time zone. Timestamps stay in UTC internally but display in the chosen IANA time zone with daylight-saving transitions.
-5. Use **Settings → Administrator Account** to change the initial username or password when needed. Changing credentials requires the current password.
+3. In **Settings → Alert Types**, import the [official NWS alert event-type catalog](https://api.weather.gov/alerts/types), then explicitly select the warnings, watches, advisories, and other alerts to monitor. The catalog is cached locally; a failed refresh leaves the existing cached catalog and selection intact. Disabling a type stops new alerts of that type; it does not modify recorded alerts or send a message.
+4. In **Settings → Coverage Counties**, import the official NWS county catalog once, then select and explicitly save the counties to monitor. County selection is stored in SQLite; an empty selection is fail-closed and does not mean “all counties.”
+5. Set the application time zone. Timestamps stay in UTC internally but display in the chosen IANA time zone with daylight-saving transitions.
+6. Use **Settings → Administrator Account** to change the initial username or password when needed. Changing credentials requires the current password.
 
 Coverage changes take effect on the next NWS poll and in Test Alerts without a service restart. Counties outside the selected polling states are retained but not monitored until their state is enabled again.
 
@@ -148,9 +149,9 @@ Before remote, Wi-Fi guest, Internet, or otherwise untrusted access, put a maint
 
 ## Configuration ownership
 
-The installer-managed YAML file contains service settings only: database path, loopback host/port, cookie-security mode, alert allowlist, and message cap. The protected environment file contains the session secret only. SQLite is authoritative for administrator credentials, NWS contact/states/polling interval, time zone, county catalog/selection, Companion/channel selections, and normal manual-transmission permission.
+The installer-managed YAML file contains service settings only: database path, loopback host/port, cookie-security mode, and message cap. The protected environment file contains the session secret only. SQLite is authoritative for administrator credentials, NWS contact/states/polling interval, alert-type catalog/selection, time zone, county catalog/selection, Companion/channel selections, and normal manual-transmission permission.
 
-Legacy YAML counties, credentials, and operational settings are migrated once into SQLite when missing; existing SQLite choices are not overwritten.
+Legacy YAML counties, alert types, credentials, and operational settings are migrated once into SQLite when missing; existing SQLite choices are not overwritten.
 
 ## Limits
 

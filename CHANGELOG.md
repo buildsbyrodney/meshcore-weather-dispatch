@@ -2,6 +2,10 @@
 
 All notable changes are documented here. This project follows semantic versioning; pre-release versions use the `-rc.N` suffix in public release names.
 
+## Unreleased
+
+- Added SQLite-backed NWS alert-type selection, an explicitly refreshed official NWS event-type catalog, and a searchable grouped Settings page. Existing YAML selections migrate once when SQLite has no saved selection; already-recorded alert families remain intact when an operator later deselects an event type.
+
 ## v1.0.0-rc.2 — 2026-11-02
 
 Second public release candidate, verified through a clean Raspberry Pi OS 64-bit installation with a USB MeshCore Companion.

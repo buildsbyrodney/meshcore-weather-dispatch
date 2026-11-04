@@ -1,0 +1,19 @@
+{% extends 'base.html' %}{% block content %}
+<h1>Manage Alert Types</h1>
+<p class="muted">Choose the NWS alert event types Weather Dispatch monitors. Disabling an event type stops new alerts of that type from entering the dispatch queue; it does not alter alerts already recorded.</p>
+{% if has_catalog %}
+<details class="catalog-advanced"><summary>Advanced / Refresh NWS Alert Types</summary><p class="catalog-guidance">Catalog stored locally. Re-import only to refresh the official NWS event list. Source: {{catalog_meta.source}} · imported {{catalog_meta.retrieved_at}}{% if catalog_meta.version %} · {{catalog_meta.version}}{% endif %}</p><form method="post"><input type="hidden" name="csrf_token" value="{{csrf_token()}}"><input type="hidden" name="action" value="refresh"><button>Refresh official NWS catalog</button></form></details>
+{% else %}
+<section class="catalog-initial-import"><p class="catalog-guidance">Import the official NWS alert-type catalog first. It is stored locally, so this is normally needed only once. Until it is available, the three default warning types can still be selected.</p><form method="post"><input type="hidden" name="csrf_token" value="{{csrf_token()}}"><input type="hidden" name="action" value="refresh"><button>Import official NWS catalog</button></form></section>
+{% endif %}
+<section class="alert-type-selector"><div class="alert-type-controls"><label>Search alert types<input id="alert-type-search" type="search" placeholder="For example: Tornado"></label><p><b id="enabled-count">{{selected_count}}</b> alert types enabled</p><button type="button" id="select-all-alert-types">Select All</button><button type="button" id="clear-all-alert-types">Clear All</button></div>
+<form method="post"><input type="hidden" name="csrf_token" value="{{csrf_token()}}"><input type="hidden" name="action" value="save">{% for title,events in groups.items() %}{% if events %}<fieldset class="alert-type-group"><legend>{{title}}</legend>{% for entry in events %}<label class="alert-type-choice inline-check"><input type="checkbox" name="event" value="{{entry.event}}" {% if entry.event in selected %}checked{% endif %}><span>{{entry.event}}</span></label>{% endfor %}</fieldset>{% endif %}{% endfor %}<button>Save Alert Types</button></form></section>
+<script>
+const search=document.querySelector('#alert-type-search'),checks=[...document.querySelectorAll('.alert-type-choice input')],count=document.querySelector('#enabled-count');
+const updateCount=()=>count.textContent=checks.filter(x=>x.checked).length;
+const updateFilter=()=>{const q=search.value.trim().toLowerCase();document.querySelectorAll('.alert-type-choice').forEach(row=>row.hidden=!row.textContent.toLowerCase().includes(q));};
+search.addEventListener('input',updateFilter);checks.forEach(x=>x.addEventListener('change',updateCount));
+document.querySelector('#select-all-alert-types').addEventListener('click',()=>{checks.forEach(x=>x.checked=true);updateCount()});
+document.querySelector('#clear-all-alert-types').addEventListener('click',()=>{checks.forEach(x=>x.checked=false);updateCount()});
+</script>
+{% endblock %}
