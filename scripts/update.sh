@@ -32,6 +32,10 @@ systemctl stop meshcore-weather-dispatch
 runuser -u weatherdispatch -- git -C "$APP" checkout "$UPDATE_BRANCH"; runuser -u weatherdispatch -- git -C "$APP" pull --ff-only origin "$UPDATE_BRANCH"
 runuser -u weatherdispatch -- sh -c 'cd "$1" && .venv/bin/pip install --upgrade -e .' sh "$APP"
 install -m 644 "$APP/systemd/meshcore-weather-dispatch.service" /etc/systemd/system/meshcore-weather-dispatch.service
+install -d -m 755 /usr/local/libexec
+install -m 755 "$APP/scripts/web-update-worker.sh" /usr/local/libexec/meshcore-weather-dispatch-update
+install -m 755 "$APP/scripts/web-reboot.sh" /usr/local/libexec/meshcore-weather-dispatch-reboot
+printf 'weatherdispatch ALL=(root) NOPASSWD: /usr/local/libexec/meshcore-weather-dispatch-update ""\nweatherdispatch ALL=(root) NOPASSWD: /usr/local/libexec/meshcore-weather-dispatch-reboot ""\n' | install -m 440 /dev/stdin /etc/sudoers.d/meshcore-weather-dispatch-web-updates
 [[ -e /etc/nginx/sites-enabled/meshcore-weather-dispatch && ! -L /etc/nginx/sites-enabled/meshcore-weather-dispatch ]] && { echo 'Managed Nginx link replaced; refusing overwrite.' >&2; exit 1; }
 install -m 644 "$APP/nginx/meshcore-weather-dispatch.conf" /etc/nginx/sites-available/meshcore-weather-dispatch; [[ -e /etc/nginx/sites-enabled/meshcore-weather-dispatch ]] || ln -s /etc/nginx/sites-available/meshcore-weather-dispatch /etc/nginx/sites-enabled/meshcore-weather-dispatch
 nginx -t; systemctl daemon-reload; systemctl reload nginx; systemctl start meshcore-weather-dispatch

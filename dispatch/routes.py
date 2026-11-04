@@ -16,6 +16,7 @@ from .test_alerts import build_test_alert, TestAlertError
 from .coverage import fetch_catalog, CatalogError
 from .runtime import runtime_config, transmissions_enabled, contact_email, states
 from .alert_types import DEFAULT_ALERT_TYPES, category as alert_type_category, fetch_event_types, AlertTypeCatalogError
+from .updates import installed as installed_update, available as available_update, status as update_status, launch as launch_update
 
 bp=Blueprint("console",__name__)
 def admin(fn):
@@ -268,6 +269,28 @@ def alert_types_page():
    if action=="save": return page(request.form.getlist("event"))
   return redirect(url_for("console.alert_types_page"))
  return page()
+@bp.get("/settings/software-updates")
+@admin
+def software_updates(): return render_template("software_updates.html",installed=installed_update(),available=available_update(),update=update_status(current_app.config))
+@bp.get("/api/software-updates")
+@admin
+def software_update_status(): return jsonify(update_status(current_app.config))
+@bp.post("/settings/software-updates/install")
+@admin
+def install_software_update():
+ if request.form.get("confirm")!="yes": flash("Update was not started: explicit confirmation is required.")
+ else:
+  try: launch_update(current_app.config);current_app.extensions["db"].audit(None,"software_update_requested",actor(),"web update helper launched");flash("Update started. The console retains output while services restart.")
+  except RuntimeError as exc: flash(f"Update was not started: {exc}")
+ return redirect(url_for("console.software_updates"))
+@bp.post("/settings/software-updates/reboot")
+@admin
+def reboot_host():
+ if request.form.get("confirm")!="yes": flash("Reboot was not requested: explicit confirmation is required.")
+ else:
+  try: launch_update(current_app.config,reboot=True);current_app.extensions["db"].audit(None,"reboot_requested",actor(),"web reboot helper launched");flash("Reboot requested.")
+  except RuntimeError as exc: flash(f"Reboot was not requested: {exc}")
+ return redirect(url_for("console.software_updates"))
 @bp.route("/settings/coverage-counties",methods=["GET","POST"])
 @admin
 def coverage_counties_page():
