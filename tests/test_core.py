@@ -32,10 +32,26 @@ def test_utf8_cap_and_marked_comment():
  else: assert False
  assert len(truncate_utf8("é"*20,10).encode())<=10
 
-def test_radio_message_uses_local_timezone_and_keeps_essential_area():
- f=feature();f["properties"]["expires"]="2026-07-01T18:00:00+00:00";f["properties"]["areaDesc"]="Madison County, AL"
+def test_radio_message_uses_concise_local_nws_format_without_counties_or_headline():
+ f=feature();p=f["properties"];p.update({"event":"Dense Fog Advisory","expires":"2026-11-05T15:00:00+00:00","areaDesc":", ".join(f"County {n}" for n in range(25)),"headline":"Dense fog will make travel dangerous","description":"Long official description that remains in the console, not on the radio.","senderName":"NWS Birmingham AL"})
+ assert radio_message(f,"America/Chicago")=="DENSE FOG ADVISORY Expires November 5 at 9:00AM CST by NWS Birmingham AL"
+
+def test_radio_message_uses_daylight_abbreviation_and_blocks_an_oversize_essential_message():
+ f=feature();p=f["properties"];p.update({"event":"Exceptionally Long Experimental Weather Event Name","expires":"2026-07-01T18:00:00+00:00","senderName":"NWS " + "Very Long Issuing Office " * 10})
  text=radio_message(f,"America/Chicago")
- assert "Madison County, AL" in text and "CDT" in text and "UTC" not in text
+ assert "July 1 at 1:00PM CDT" in text and "Very Long Issuing Office" in text
+ try: append_comment(text,"",80)
+ except Exception as error: assert "essential warning details" in str(error)
+ else: assert False, "radio preview must enforce the configured UTF-8 limit"
+
+def test_radio_message_handles_missing_fields_without_inventing_details():
+ assert radio_message({"properties":{}},"America/Chicago")=="WEATHER ALERT Expires unavailable"
+
+def test_ingest_uses_the_saved_configured_timezone_for_radio_preview(tmp_path):
+ app=create_app(config(tmp_path));app.extensions["db"].save_setting("timezone","America/Chicago")
+ f=feature();f["properties"].update({"expires":"2026-07-01T18:00:00+00:00","senderName":"NWS Birmingham AL"})
+ ingest(app,[f])
+ assert "1:00PM CDT" in app.extensions["db"].get("new")["message"]
 
 def test_pending_revision_supersedes_and_is_actionable(tmp_path):
  app=create_app(config(tmp_path)); ingest(app,[feature("old")]); ingest(app,[feature("new","sender,old,when",description="Take shelter now")])
@@ -93,6 +109,10 @@ def test_actual_nws_geocodes_support_partial_and_multi_county_alerts():
  assert not eligible(partial,{"alert_types":["Tornado Warning"],"counties":["01083"]})
  assert cap_reference_ids("w-nws.webmaster@noaa.gov,urn:oid:2.49.0.1,2026-01-01T00:00:00-00:00")==["urn:oid:2.49.0.1"]
 
+def test_coverage_does_not_infer_counties_from_prose_or_polygons():
+ feature={"properties":{"event":"Tornado Warning","areaDesc":"Madison County","description":"Madison County is affected","geocode":{"SAME":["001083"],"UGC":["ALC083"]}},"geometry":{"type":"Polygon","coordinates":[]}}
+ assert not eligible(feature,{"alert_types":["Tornado Warning"],"counties":["001089","ALC089"]})
+
 def test_test_alert_single_county_uses_configured_identifiers(tmp_path):
  cfg=config(tmp_path);cfg["counties"]=[{"name":"Madison County, AL","same":"001089","ugc":"ALC089"}]
  choice=coverage_counties(cfg)[0]; feature=build_test_alert(cfg,[choice["id"]],"Tornado Warning")
@@ -125,7 +145,7 @@ def test_test_alert_maximum_length_keeps_test_marker_and_all_counties(tmp_path):
  cfg=config(tmp_path);cfg["max_message_bytes"]=80;cfg["counties"]= [{"name":f"Very Long County Name {n}","same":f"01{n:04d}"} for n in range(20)]
  feature=build_test_alert(cfg,[x["id"] for x in coverage_counties(cfg)],"Tornado Warning")
  app=create_app(cfg);ingest(app,[feature]);alert=app.extensions["db"].get(feature["properties"]["id"])
- assert len(alert["message"].encode("utf-8"))>80 and alert["message"].startswith("TEST ONLY")
+ assert len(alert["message"].encode("utf-8"))<=80 and alert["message"].startswith("TEST ONLY")
  assert len(feature["properties"]["geocode"]["SAME"])==20
 
 def test_test_alert_revisions_and_cancel_do_not_alter_genuine_family(tmp_path):
