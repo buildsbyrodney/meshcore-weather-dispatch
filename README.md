@@ -109,7 +109,7 @@ For a real NWS warning, review the compact row and Details, select **Send**, ins
 
 Administrators can also open **Settings → Software Updates**. It shows the installed version and Git commit, checks the configured Git repository for `main`, and retains the guarded updater's output while the application restarts. The page requires a separate explicit confirmation before an update or a Raspberry Pi reboot. It cannot accept a command, branch, URL, or package name from the browser.
 
-The Flask service remains unprivileged with `NoNewPrivileges=true`. It requests only the fixed `update` or `reboot` operation over a mode-0660, socket-activated systemd endpoint; a root-owned worker validates that fixed request, serializes updates, and writes browser-readable status and logs. Flask has no sudoers entry and never runs a root command. The worker survives a Gunicorn restart because systemd owns it.
+The Flask service remains unprivileged with `NoNewPrivileges=true`. It requests only the fixed `update` or `reboot` operation over a mode-0660, socket-activated systemd endpoint; a root-owned worker validates that fixed request, serializes updates, and writes browser-readable status and logs. Flask has no sudoers entry and never runs a root command. The worker survives a Gunicorn restart because systemd owns it. Web-triggered updates do not replace root worker scripts or systemd units; apply future changes to those privileged assets through the same trusted-terminal procedure below.
 
 ### One-time bootstrap for existing v1.0.0-rc.2 installations
 

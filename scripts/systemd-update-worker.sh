@@ -12,4 +12,4 @@ if [[ "$request" == reboot ]]; then
  write_status running "Reboot requested"; printf 'Reboot requested by the web console.\n' > "$LOG"; chown root:weatherdispatch "$LOG"; chmod 640 "$LOG"; systemd-run --unit=meshcore-weather-dispatch-reboot --on-active=2s /usr/bin/systemctl reboot; write_status success "Reboot scheduled"; exit 0
 fi
 write_status running "Update running"; : > "$LOG"; chown root:weatherdispatch "$LOG"; chmod 640 "$LOG"
-if /usr/local/libexec/meshcore-weather-dispatch-update >> "$LOG" 2>&1; then write_status success "Update completed"; else write_status failed "Update failed; see console"; fi
+if WEB_UPDATE=1 /usr/local/libexec/meshcore-weather-dispatch-update >> "$LOG" 2>&1; then write_status success "Update completed"; else write_status failed "Update failed; see console"; fi

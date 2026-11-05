@@ -33,15 +33,19 @@ if ! command -v nginx >/dev/null; then apt-get update; apt-get install -y nginx;
 systemctl stop meshcore-weather-dispatch
 runuser -u weatherdispatch -- git -C "$APP" checkout "$UPDATE_BRANCH"; runuser -u weatherdispatch -- git -C "$APP" pull --ff-only origin "$UPDATE_BRANCH"
 runuser -u weatherdispatch -- sh -c 'cd "$1" && .venv/bin/pip install --upgrade -e .' sh "$APP"
-install -m 644 "$APP/systemd/meshcore-weather-dispatch.service" /etc/systemd/system/meshcore-weather-dispatch.service
-install -m 644 "$APP/systemd/meshcore-weather-dispatch-update.socket" /etc/systemd/system/meshcore-weather-dispatch-update.socket
-install -m 644 "$APP/systemd/meshcore-weather-dispatch-update@.service" /etc/systemd/system/meshcore-weather-dispatch-update@.service
-install -d -m 755 /usr/local/libexec
-install -m 755 "$APP/scripts/systemd-update-worker.sh" /usr/local/libexec/meshcore-weather-dispatch-update-worker
-rm -f /etc/sudoers.d/meshcore-weather-dispatch-web-updates
+if [[ ${WEB_UPDATE:-0} != 1 ]]; then
+ install -m 644 "$APP/systemd/meshcore-weather-dispatch.service" /etc/systemd/system/meshcore-weather-dispatch.service
+ install -m 644 "$APP/systemd/meshcore-weather-dispatch-update.socket" /etc/systemd/system/meshcore-weather-dispatch-update.socket
+ install -m 644 "$APP/systemd/meshcore-weather-dispatch-update@.service" /etc/systemd/system/meshcore-weather-dispatch-update@.service
+ install -d -m 755 /usr/local/libexec
+ install -m 755 "$APP/scripts/systemd-update-worker.sh" /usr/local/libexec/meshcore-weather-dispatch-update-worker
+ rm -f /etc/sudoers.d/meshcore-weather-dispatch-web-updates
+fi
 [[ -e /etc/nginx/sites-enabled/meshcore-weather-dispatch && ! -L /etc/nginx/sites-enabled/meshcore-weather-dispatch ]] && { echo 'Managed Nginx link replaced; refusing overwrite.' >&2; exit 1; }
 install -m 644 "$APP/nginx/meshcore-weather-dispatch.conf" /etc/nginx/sites-available/meshcore-weather-dispatch; [[ -e /etc/nginx/sites-enabled/meshcore-weather-dispatch ]] || ln -s /etc/nginx/sites-available/meshcore-weather-dispatch /etc/nginx/sites-enabled/meshcore-weather-dispatch
-nginx -t; systemctl daemon-reload; systemctl reload nginx; systemctl enable --now meshcore-weather-dispatch-update.socket; systemctl start meshcore-weather-dispatch
+nginx -t; systemctl daemon-reload; systemctl reload nginx
+if [[ ${WEB_UPDATE:-0} != 1 ]]; then systemctl enable --now meshcore-weather-dispatch-update.socket; fi
+systemctl start meshcore-weather-dispatch
 for attempt in $(seq 1 15); do curl --fail --max-time 2 -I http://127.0.0.1/ >/dev/null 2>&1 && break; sleep 1; done
 curl --fail --max-time 5 -I http://127.0.0.1/ >/dev/null
 trap - ERR; echo "Updated successfully. Backup: $BACKUP"
