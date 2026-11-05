@@ -210,7 +210,10 @@ jobs:
           # replacement root helper and retain a final status/log after restart.
           # The worker correctly has PrivateTmp=true, so keep this local-only
           # Git fixture in its permitted durable state directory, not /tmp.
-          sudo git clone --bare /tmp/meshcore-origin.git /var/lib/meshcore-weather-dispatch/ci-origin.git
+          # Production updates target main; give this disposable fixture the
+          # same branch layout while the migration itself remains on integration.
+          sudo -u weatherdispatch git -C /opt/meshcore-weather-dispatch branch -f main integration
+          sudo git clone --bare /opt/meshcore-weather-dispatch /var/lib/meshcore-weather-dispatch/ci-origin.git
           sudo chown -R weatherdispatch:weatherdispatch /var/lib/meshcore-weather-dispatch/ci-origin.git
           sudo -u weatherdispatch git -C /opt/meshcore-weather-dispatch remote set-url origin file:///var/lib/meshcore-weather-dispatch/ci-origin.git
           sudo -u weatherdispatch python3 - <<'PY'
@@ -233,6 +236,24 @@ jobs:
             exit 1;
           fi
           sudo grep -q 'Updated successfully' /var/lib/meshcore-weather-dispatch/web-updates/update.log
+          sudo systemctl is-active --quiet meshcore-weather-dispatch
+          curl -fsSI http://127.0.0.1/ | grep -qi HTTP/
+          # A failed web update must restore the previous checkout and install
+          # from the protected dependency snapshot without exposing the backup.
+          sudo -u weatherdispatch sh -c 'cd /opt/meshcore-weather-dispatch && printf "\\ninvalid nginx directive;\\n" >> nginx/meshcore-weather-dispatch.conf && git add nginx/meshcore-weather-dispatch.conf && git commit -m "ci intentionally invalid web update" && git push origin HEAD:main'
+          sudo -u weatherdispatch python3 - <<'PY'
+          import socket
+          s=socket.socket(socket.AF_UNIX); s.connect('/run/meshcore-weather-dispatch/update.sock'); s.sendall(b'update\n')
+          PY
+          failed=0
+          for attempt in $(seq 1 30); do if sudo grep -q '"status":"failed"' /var/lib/meshcore-weather-dispatch/web-updates/status.json; then failed=1; break; fi; sleep 1; done
+          if [ "$failed" != 1 ]; then
+            echo 'update worker did not report its expected failed recovery';
+            sudo cat /var/lib/meshcore-weather-dispatch/web-updates/update.log || true;
+            exit 1;
+          fi
+          sudo grep -q 'Update failed; restoring' /var/lib/meshcore-weather-dispatch/web-updates/update.log
+          ! sudo grep -q 'Permission denied.*pip-freeze.txt\|Python dependency rollback needs manual recovery' /var/lib/meshcore-weather-dispatch/web-updates/update.log
           sudo systemctl is-active --quiet meshcore-weather-dispatch
           curl -fsSI http://127.0.0.1/ | grep -qi HTTP/
       - name: Refuse unsafe migration inputs without stopping service
