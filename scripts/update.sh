@@ -2,6 +2,7 @@
 set -euo pipefail
 [[ ${EUID} -eq 0 ]] || { echo 'Run with sudo.' >&2; exit 1; }
 APP=/opt/meshcore-weather-dispatch; ETC=/etc/meshcore-weather-dispatch; STATE=/var/lib/meshcore-weather-dispatch; DB=$STATE/dispatch.sqlite3; BACKUP=/var/backups/meshcore-weather-dispatch/$(date -u +%Y%m%dT%H%M%SZ)
+SELF=$(readlink -f "$0")
 UPDATE_BRANCH=${UPDATE_BRANCH:-main}
 [[ -d "$APP/.git" ]] || { echo 'Not an updateable Git checkout; refusing update.' >&2; exit 1; }
 runuser -u weatherdispatch -- git -C "$APP" remote get-url origin >/dev/null; runuser -u weatherdispatch -- git -C "$APP" diff --quiet || { echo 'Local application edits detected; refusing update.' >&2; exit 1; }
@@ -38,6 +39,7 @@ if [[ ${WEB_UPDATE:-0} != 1 ]]; then
  install -m 644 "$APP/systemd/meshcore-weather-dispatch-update.socket" /etc/systemd/system/meshcore-weather-dispatch-update.socket
  install -m 644 "$APP/systemd/meshcore-weather-dispatch-update@.service" /etc/systemd/system/meshcore-weather-dispatch-update@.service
  install -d -m 755 /usr/local/libexec
+ install -o root -g root -m 755 "$SELF" /usr/local/libexec/meshcore-weather-dispatch-update
  install -m 755 "$APP/scripts/systemd-update-worker.sh" /usr/local/libexec/meshcore-weather-dispatch-update-worker
  rm -f /etc/sudoers.d/meshcore-weather-dispatch-web-updates
 fi

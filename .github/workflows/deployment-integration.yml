@@ -183,14 +183,21 @@ jobs:
           from dispatch.db import Database
           db=Database('/var/lib/meshcore-weather-dispatch/dispatch.sqlite3'); db.initialize(); db.bootstrap_operational_settings({'admin_username':'ciadmin','admin_password_hash':'scrypt:32768:8:1$X$C8YciwLCAazhj6PeXTvoUHl0LTB7qm4JzB47lqYsOiwD9sEzKJzQx9QHdT1yTQ','states':['AL'],'nws_user_agent':'MeshCoreWeatherDispatch/0.1 ci@example.invalid','poll_seconds':60,'alert_types':['Tornado Warning'],'transmit_enabled':False}); db.replace_catalog([{'ugc':'ALC089','state':'AL','name':'Madison','same':'001089'}],{'source':'legacy'}); db.save_coverage(['ALC089']); db.save_setting('device','{"stable_path":"/dev/null"}'); db.save_setting('tx_channel','{"index":1,"name":"#ci"}')
           PY
+          # Simulate the root helper left behind by v1.0.0-rc.2.
+          sudo install -d -m 755 /usr/local/libexec
+          printf '#!/bin/sh\necho legacy-helper\n' | sudo tee /usr/local/libexec/meshcore-weather-dispatch-update >/dev/null
+          sudo chmod 755 /usr/local/libexec/meshcore-weather-dispatch-update
           sudo systemctl daemon-reload; sudo systemctl enable --now meshcore-weather-dispatch
       - name: Migrate legacy installation and verify durable state
         env:
           UPDATE_BRANCH: integration
         run: |
           before_secret=$(sudo sha256sum /etc/meshcore-weather-dispatch/environment | cut -d' ' -f1)
-          sudo -E bash "$GITHUB_WORKSPACE/scripts/update.sh"
+          sudo -E bash "$GITHUB_WORKSPACE/scripts/migrate-web-updater.sh"
           sudo systemctl is-active --quiet nginx meshcore-weather-dispatch
+          sudo systemctl is-active --quiet meshcore-weather-dispatch-update.socket
+          sudo cmp -s "$GITHUB_WORKSPACE/scripts/update.sh" /usr/local/libexec/meshcore-weather-dispatch-update
+          test "$(sudo stat -c '%U:%G %a' /usr/local/libexec/meshcore-weather-dispatch-update)" = 'root:root 755'
           sudo grep -q -- '--no-control-socket' /etc/systemd/system/meshcore-weather-dispatch.service
           sudo test -f /etc/systemd/system/meshcore-weather-dispatch.service.d/local.conf
           test "$before_secret" = "$(sudo sha256sum /etc/meshcore-weather-dispatch/environment | cut -d' ' -f1)"
@@ -199,7 +206,15 @@ jobs:
           db=Database('/var/lib/meshcore-weather-dispatch/dispatch.sqlite3'); assert db.coverage() and db.setting('device') and db.setting('tx_channel'); assert db.setting('transmit_enabled')=='false'; assert __import__('json').loads(db.setting('nws_alert_types'))==['Tornado Warning']
           PY
           sudo test -d /var/backups/meshcore-weather-dispatch
-          sudo -E bash "$GITHUB_WORKSPACE/scripts/update.sh"
+          # This is the unprivileged browser-side handoff: it must execute the
+          # replacement root helper and retain a final status/log after restart.
+          sudo -u weatherdispatch python3 - <<'PY'
+          import socket
+          s=socket.socket(socket.AF_UNIX); s.connect('/run/meshcore-weather-dispatch/update.sock'); s.sendall(b'update\n')
+          PY
+          for attempt in $(seq 1 30); do sudo grep -q '"status":"success"' /var/lib/meshcore-weather-dispatch/web-updates/status.json && break; sleep 1; done
+          sudo grep -q 'Updated successfully' /var/lib/meshcore-weather-dispatch/web-updates/update.log
+          sudo systemctl is-active --quiet meshcore-weather-dispatch
           curl -fsSI http://127.0.0.1/ | grep -qi HTTP/
       - name: Refuse unsafe migration inputs without stopping service
         env:

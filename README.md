@@ -113,7 +113,7 @@ The Flask service remains unprivileged with `NoNewPrivileges=true`. It requests 
 
 ### One-time bootstrap for existing v1.0.0-rc.2 installations
 
-The older web updater cannot install this correction itself. On WXALERT, run this one command once from a trusted terminal (not from the web console). It downloads the migration script to a temporary root-owned directory; the script creates the normal timestamped backup **before** changing the live checkout or Python environment:
+The older web updater cannot install this correction itself. **Run this only after this PR has been merged to `main`.** On WXALERT, run this one command once from a trusted terminal (not from the web console). It downloads the migration script to a temporary root-owned directory; the script creates the normal timestamped backup **before** changing the live checkout or Python environment:
 
 ```sh
 sudo bash -c 'set -e; d=$(mktemp -d); trap "rm -rf $d" EXIT; git clone --depth 1 --branch main https://github.com/buildsbyrodney/meshcore-weather-dispatch.git "$d"; "$d/scripts/migrate-web-updater.sh"'
