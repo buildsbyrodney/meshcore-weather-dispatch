@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from dispatch import create_app
 from dispatch.poller import ingest
 from dispatch.automatic import AutomaticQueue
+from concurrent.futures import ThreadPoolExecutor
 
 def config(tmp_path):
     return {"TESTING":True,"secret_key":"test","database":str(tmp_path/"auto.sqlite"),"admin_username":"admin","admin_password_hash":"hash","nws_user_agent":"tests@example.invalid","states":["AL"],"alert_types":["Tornado Warning","Tornado Watch"],"counties":[{"name":"Bibb County, AL","same":"001007","ugc":"ALC007"},{"name":"Jefferson County, AL","same":"001073","ugc":"ALC073"}],"max_message_bytes":180,"transmit_enabled":True,"poll_seconds":60,"start_poller":False}
@@ -66,3 +67,17 @@ def test_simultaneous_auto_work_is_spaced_and_old_cancel_is_rejected(tmp_path,mo
     clock[0]=5.0;queue._timer_fired();assert [x[0] for x in sent]==[0.0,5.0]
     old=feature("old-cancel","Cancel","sender,one,when",codes=[]);old["properties"].update({"sent":"2000-01-01T00:00:00+00:00","geocode":{}});ingest(app,[old])
     assert len(sent)==2
+
+def test_concurrent_cancellation_claims_once_and_keeps_canceled_history(tmp_path,monkeypatch):
+    app=create_app(config(tmp_path));enabled(app);sent=[];db=app.extensions["db"]
+    monkeypatch.setattr("dispatch.automatic.auto_device_state",lambda db: ({},{"device":"fake"},"connected"))
+    monkeypatch.setattr("dispatch.automatic.verify_channel",lambda *a: None)
+    monkeypatch.setattr("dispatch.automatic.send",lambda *a: sent.append(a[-1]) or "accepted")
+    ingest(app,[feature("original")]);assert len(sent)==1
+    db.save_setting("auto_sending_enabled","false")
+    cancel=feature("cancel","Cancel","sender,original,when",codes=[]);cancel["properties"]["geocode"]={};ingest(app,[cancel])
+    db.save_settings({"auto_sending_enabled":"true","auto_dispatch_not_before":"2000-01-01T00:00:00+00:00"})
+    from dispatch.automatic import _attempt
+    with ThreadPoolExecutor(max_workers=2) as pool: list(pool.map(lambda _: _attempt(app,"cancel"),range(2)))
+    assert len(sent)==2 and db.get("cancel")["status"]=="canceled"
+    assert [x["action"] for x in db.history() if x["cap_id"]=="cancel"].count("auto_sent")==1

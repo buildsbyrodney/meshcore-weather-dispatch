@@ -32,19 +32,25 @@ def eligible_auto(app, alert):
 def _attempt(app, cap_id):
     db=app.extensions["db"];alert=db.get(cap_id)
     if not alert or not eligible_auto(app,alert): return None
-    # One bounded, non-retrying attempt per newly observed CAP revision.
-    if alert["status"]=="pending" and not db.claim(cap_id,"automatic"): return None
+    props=json.loads(alert["raw_json"])["properties"]
+    cancellation=str(props.get("_mesh_kind") or "").upper()=="CANCELED"
+    # CAP cancellations remain canceled in history, but receive the same
+    # atomic, terminal reservation as ordinary pending warnings.
+    claimed=db.claim_cancellation(cap_id,"automatic") if cancellation else db.claim(cap_id,"automatic")
+    if not claimed: return None
     _,device,status=auto_device_state(db);channel=auto_saved_channel(db)
     try:
         verify_channel(device,channel)
         from .messages import radio_message
         message=radio_message(json.loads(alert["raw_json"]),db.setting("timezone") or app.config.get("timezone","UTC"),app.config.get("max_message_bytes",180))
         detail=send(runtime_config(app.config,db),device,channel,message)
-        db.finish(cap_id,"auto_sent","automatic",detail,message)
+        if cancellation: db.audit(cap_id,"auto_sent","automatic",detail,message)
+        else: db.finish(cap_id,"auto_sent","automatic",detail,message)
         return True
     except (RadioError,ValueError,KeyError) as exc:
         # A failed attempt is terminal: no reconnect/backlog retry storm.
-        db.finish(cap_id,"auto_failed","automatic",f"{status}. {exc}",alert["message"])
+        if cancellation: db.audit(cap_id,"auto_failed","automatic",f"{status}. {exc}",alert["message"])
+        else: db.finish(cap_id,"auto_failed","automatic",f"{status}. {exc}",alert["message"])
         return False
 
 class AutomaticQueue:

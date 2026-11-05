@@ -134,6 +134,14 @@ class Database:
             if r.rowcount != 1:
                 c.execute("ROLLBACK"); return False
             c.execute("COMMIT"); return True
+    def claim_cancellation(self, cap_id: str, actor: str) -> bool:
+        """Atomically reserve a CAP cancellation without changing its status."""
+        with self.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            r=c.execute("UPDATE alerts SET claimed_by=?,claimed_at=?,updated_at=? WHERE cap_id=? AND status='canceled' AND claimed_by IS NULL",(actor,now(),now(),cap_id))
+            if r.rowcount!=1:
+                c.execute("ROLLBACK");return False
+            c.execute("COMMIT");return True
     def consume_preview(self, jti: str) -> bool:
         """Atomically consume a server-issued confirmation preview exactly once."""
         with self.connect() as c:
