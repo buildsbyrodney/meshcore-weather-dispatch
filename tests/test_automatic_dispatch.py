@@ -26,8 +26,10 @@ def test_console_switch_defaults_off_requires_confirmation_and_persists(tmp_path
     client.post("/automatic-sending",data={"csrf_token":csrf(client),"automatic_enabled":"yes"})
     assert db.setting("auto_sending_enabled")=="false"
     db.save_setting("auto_warning_types",'["Tornado Warning"]')
-    client.post("/automatic-sending",data={"csrf_token":csrf(client),"automatic_enabled":"yes","confirm":"yes"})
+    enabled_page=client.post("/automatic-sending",data={"csrf_token":csrf(client),"automatic_enabled":"yes","confirm":"yes"},follow_redirects=True).data.decode()
     assert db.setting("auto_sending_enabled")=="true" and create_app(config(tmp_path)).extensions["db"].setting("auto_sending_enabled")=="true"
+    assert "Automatic warning sending is ON. Only fresh selected warnings qualify." not in enabled_page
+    assert ">ON<" in enabled_page
 
 def test_automatic_warning_type_selection_remains_checked_and_is_server_validated(tmp_path):
     app=create_app(config(tmp_path));db=app.extensions["db"];client=app.test_client()
