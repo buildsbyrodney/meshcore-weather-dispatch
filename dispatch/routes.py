@@ -56,6 +56,8 @@ def alert_actionability_error(alert):
  return None
 def final_alert_message(alert, comment=""):
  return append_comment(radio_message(json.loads(alert["raw_json"]),app_timezone(current_app.extensions["db"])),comment,current_app.config.get("max_message_bytes",180))
+def reopened_alert_message(alert):
+ return append_comment(radio_message(json.loads(alert["raw_json"]),app_timezone(current_app.extensions["db"])),"",current_app.config.get("max_message_bytes",180))
 def preview_signer(): return URLSafeTimedSerializer(current_app.config["SECRET_KEY"],salt="dispatch-preview-v1")
 
 @bp.route("/login",methods=["GET","POST"])
@@ -98,6 +100,31 @@ def preview_ignore(cap_id):
  db=current_app.extensions["db"];alert=db.get(cap_id)
  if error:=alert_actionability_error(alert): return jsonify(error=error),409
  return jsonify(token=preview_signer().dumps({"jti":uuid4().hex,"action":"ignore","cap_id":cap_id,"updated_at":alert["updated_at"]}))
+@bp.post("/alerts/<cap_id>/reopen-preview")
+@admin
+def preview_reopen(cap_id):
+ db=current_app.extensions["db"];alert=db.get(cap_id)
+ if not alert or alert["status"]!="ignored" or alert["test_only"]: return jsonify(error="alert is no longer an ignored NWS alert"),409
+ if error:=db.reopen_error(cap_id): return jsonify(error=error),409
+ try: message=reopened_alert_message(alert)
+ except (MessageError, TypeError, ValueError, KeyError, json.JSONDecodeError) as exc: return jsonify(error=f"cannot regenerate a safe radio preview: {exc}"),400
+ return jsonify(message=message,bytes=len(message.encode("utf-8")),cap=message_limit(current_app.config),token=preview_signer().dumps({"jti":uuid4().hex,"action":"reopen","cap_id":cap_id,"updated_at":alert["updated_at"],"message":message,"timezone":app_timezone(db),"cap":message_limit(current_app.config)}))
+@bp.post("/alerts/<cap_id>/reopen")
+@admin
+def reopen(cap_id):
+ db=current_app.extensions["db"]
+ if request.form.get("confirm")!="yes": flash("No change: explicit confirmation is required.");return redirect(url_for("console.index"))
+ try: preview=preview_signer().loads(request.form.get("reopen_token",""),max_age=300)
+ except (SignatureExpired,BadSignature): flash("No change: reopen confirmation expired or is invalid.");return redirect(url_for("console.index"))
+ alert=db.get(cap_id)
+ if preview.get("action")!="reopen" or preview.get("cap_id")!=cap_id or not alert or preview.get("updated_at")!=alert["updated_at"] or preview.get("timezone")!=app_timezone(db) or preview.get("cap")!=message_limit(current_app.config): flash("No change: warning, time zone, or message limit changed; review it again.");return redirect(url_for("console.index"))
+ try: message=reopened_alert_message(alert)
+ except (MessageError, TypeError, ValueError, KeyError, json.JSONDecodeError) as exc: flash(f"No change: cannot regenerate a safe radio preview: {exc}");return redirect(url_for("console.index"))
+ if preview.get("message")!=message: flash("No change: warning message changed; review it again.");return redirect(url_for("console.index"))
+ if not db.consume_preview(preview.get("jti", "")): flash("No change: this confirmation was already used; review the warning again.");return redirect(url_for("console.index"))
+ if error:=db.reopen(cap_id,actor(),message): flash(f"No change: {error}.")
+ else: flash("Alert reopened for manual review. Nothing was transmitted.")
+ return redirect(url_for("console.index"))
 @bp.post("/alerts/<cap_id>/preview")
 @admin
 def preview_transmit(cap_id):
