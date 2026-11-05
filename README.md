@@ -109,6 +109,18 @@ For a real NWS warning, review the compact row and Details, select **Send**, ins
 
 Administrators can also open **Settings → Software Updates**. It shows the installed version and Git commit, checks the configured Git repository for `main`, and retains the guarded updater's output while the application restarts. The page requires a separate explicit confirmation before an update or a Raspberry Pi reboot. It cannot accept a command, branch, URL, or package name from the browser.
 
+The Flask service remains unprivileged with `NoNewPrivileges=true`. It requests only the fixed `update` or `reboot` operation over a mode-0660, socket-activated systemd endpoint; a root-owned worker validates that fixed request, serializes updates, and writes browser-readable status and logs. Flask has no sudoers entry and never runs a root command. The worker survives a Gunicorn restart because systemd owns it. Web-triggered updates do not replace root worker scripts or systemd units; apply future changes to those privileged assets through the same trusted-terminal procedure below.
+
+### One-time bootstrap for existing v1.0.0-rc.2 installations
+
+The older web updater cannot install this correction itself. **Run this only after this PR has been merged to `main`.** On WXALERT, run this one command once from a trusted terminal (not from the web console). It downloads the migration script to a temporary root-owned directory; the script creates the normal timestamped backup **before** changing the live checkout or Python environment:
+
+```sh
+sudo bash -c 'set -e; d=$(mktemp -d); trap "rm -rf $d" EXIT; git clone --depth 1 --branch main https://github.com/buildsbyrodney/meshcore-weather-dispatch.git "$d"; "$d/scripts/migrate-web-updater.sh"'
+```
+
+The update script restarts the application and enables the new request socket; no additional restart is required, and it does not reboot the Pi. Verify with `sudo systemctl status meshcore-weather-dispatch-update.socket --no-pager`. The update page can then perform future confirmed updates. If it fails, the console names the backup directory; use the recovery procedure below and inspect `sudo journalctl -u meshcore-weather-dispatch -n 100 --no-pager`.
+
 The update worker uses the same backup and rollback procedure as the command below. It restarts the application after a completed update but never reboots automatically. A reboot is sometimes necessary after an update - follow the instructions in the console.
 
 For a managed installation, run:

@@ -1,8 +1,8 @@
 from __future__ import annotations
-import json, subprocess
+import json, socket, subprocess
 from pathlib import Path
 from .version import VERSION
-APP="/opt/meshcore-weather-dispatch"; STATE="/var/lib/meshcore-weather-dispatch/web-updates"; UPDATE_HELPER="/usr/local/libexec/meshcore-weather-dispatch-update"; REBOOT_HELPER="/usr/local/libexec/meshcore-weather-dispatch-reboot"
+APP="/opt/meshcore-weather-dispatch"; STATE="/var/lib/meshcore-weather-dispatch/web-updates"; UPDATE_SOCKET="/run/meshcore-weather-dispatch/update.sock"
 def _run(args,cwd=APP):
  if cwd and not Path(cwd).is_dir(): return subprocess.CompletedProcess(args,1,"","")
  return subprocess.run(args,cwd=cwd,text=True,capture_output=True,timeout=20,check=False)
@@ -20,5 +20,8 @@ def status(config):
  return data
 def launch(config,reboot=False):
  if config.get("TESTING") and config.get("update_helper"): return config["update_helper"]("reboot" if reboot else "update")
- r=_run(["sudo","-n",REBOOT_HELPER if reboot else UPDATE_HELPER],cwd="/")
- if r.returncode: raise RuntimeError((r.stderr or "privileged helper refused the request").strip()[:300])
+ path=config.get("update_socket",UPDATE_SOCKET)
+ try:
+  with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
+   client.settimeout(5);client.connect(path);client.sendall(("reboot" if reboot else "update").encode()+b"\n")
+ except OSError as exc: raise RuntimeError(f"privileged update worker is unavailable: {exc}") from exc
