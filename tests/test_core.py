@@ -258,7 +258,7 @@ def test_history_displays_current_mesh_alert_without_rewriting_audit(tmp_path):
  with app.test_client() as client:
   with client.session_transaction() as s:s["user"]="admin"
   page=client.get("/").data.decode()
- expected="DENSE FOG ADVISORY Expires November 5 at 9:00AM CST by NWS Birmingham AL"
+ expected="NEW DENSE FOG ADVISORY — Madison County, AL. Expires November 5 9:00AM CST NWS Birmingham AL"
  assert expected in page and 'class="mesh-alert-label">Mesh Alert</p><pre id="send-message"' in page
  with db.connect() as c:
   audit=c.execute("SELECT message FROM audit WHERE cap_id='new' AND action='ignored'").fetchone()

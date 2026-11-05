@@ -64,6 +64,12 @@ def geographically_eligible(feature, cfg):
     codes={normalize_geo_code(str(code)) for code in (geocode.get("SAME") or [])+(geocode.get("UGC") or [])}
     return bool(codes & set(counties))
 
+def matched_counties(feature, cfg) -> list[str]:
+    """Return only selected county labels whose official SAME/UGC codes match."""
+    geocode=(feature.get("properties") or {}).get("geocode") or {}
+    codes={normalize_geo_code(str(code)) for code in (geocode.get("SAME") or [])+(geocode.get("UGC") or [])}
+    return sorted({county["label"] for county in coverage_counties(cfg) if codes & set(county["same"]+county["ugc"])})
+
 def related_to_existing_alert(db, feature) -> bool:
     """Keep CAP revisions/cancellations for an existing family after deselection.
 
@@ -92,8 +98,10 @@ def mark(c, cap_id, status, detail=None):
 
 def ingest(app, features):
     db=app.extensions["db"]; cfg=app.config
+    created=[]
     for f in features:
         p=f["properties"]; cap_id=p["id"]
+        kind="NEW"
         test_only=bool(p.get("test_only")); references=cap_reference_ids(p.get("references"))
         with db.connect() as c:
             existing=c.execute("SELECT cap_id FROM alerts WHERE cap_id=?",(cap_id,)).fetchone()
@@ -105,7 +113,7 @@ def ingest(app, features):
             # A cancellation closes actionable revisions but never changes sent/ignored history.
             if cancel:
                 for row in c.execute("SELECT cap_id FROM alerts WHERE family_id=? AND test_only=? AND status IN ('pending','sending')",(family_id,int(test_only))).fetchall(): mark(c,row["cap_id"],"canceled",cap_id)
-                status="canceled"; label="Cancellation"
+                status="canceled"; label="Cancellation"; kind="CANCELED"
             else:
                 same=next((r for r in prior_rows if r["content_hash"]==fingerprint),None)
                 if same:
@@ -116,16 +124,28 @@ def ingest(app, features):
                     prior_statuses={r["status"] for r in c.execute("SELECT status FROM alerts WHERE family_id=? AND test_only=?",(family_id,int(test_only))).fetchall()}
                     for row in c.execute("SELECT cap_id FROM alerts WHERE family_id=? AND test_only=? AND status IN ('pending','sending')",(family_id,int(test_only))).fetchall(): mark(c,row["cap_id"],"superseded",cap_id)
                     status="pending"
-                    label="Updated Warning — Previously Sent" if "sent" in prior_statuses else ("Updated Warning — Previously Ignored" if "ignored" in prior_statuses else ("Updated Warning" if prior_rows else "New Warning"))
+                    label="Updated Warning — Previously Sent" if "sent" in prior_statuses else ("Updated Warning — Previously Ignored" if "ignored" in prior_statuses else ("Updated Warning" if prior_rows else "New Warning")); kind="UPDATED" if prior_rows else "NEW"
             if iso_past(p.get("expires")): status="expired"
             if test_only: label=f"TEST ONLY — {label}"
+            areas=matched_counties(f,cfg)
+            if cancel and not areas:
+                prior=c.execute("SELECT matched_areas FROM alerts WHERE family_id=? AND matched_areas<>'' ORDER BY created_at DESC LIMIT 1",(family_id,)).fetchone()
+                areas=(prior[0].split("|") if prior else [])
+            # Store the formatter facts alongside the retained CAP feature;
+            # this avoids ever inferring county names from prose or polygons.
+            p["_mesh_matched_areas"]="|".join(areas);p["_mesh_kind"]=kind
             message=radio_message(f,db.setting("timezone") or cfg.get("timezone","UTC"))
-            c.execute("INSERT INTO alerts(cap_id,family_id,content_hash,revision_label,event,headline,description,areas,sent,effective,expires,status,message,replaces_id,raw_json,test_only,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(cap_id,family_id,fingerprint,label,p.get("event",""),p.get("headline"),p.get("description"),p.get("areaDesc"),p.get("sent"),p.get("effective"),p.get("expires"),status,message,references[0] if references else None,json.dumps(f),int(test_only),now(),now()))
+            c.execute("INSERT INTO alerts(cap_id,family_id,content_hash,revision_label,event,headline,description,areas,sent,effective,expires,status,message,replaces_id,raw_json,matched_areas,test_only,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(cap_id,family_id,fingerprint,label,p.get("event",""),p.get("headline"),p.get("description"),p.get("areaDesc"),p.get("sent"),p.get("effective"),p.get("expires"),status,message,references[0] if references else None,json.dumps(f),"|".join(areas),int(test_only),now(),now()))
             c.execute("INSERT INTO audit(cap_id,action,detail,message,created_at) VALUES(?,?,?,?,?)",(cap_id,status,label,message,now()))
+            created.append(cap_id)
     with db.connect() as c:
         rows=c.execute("SELECT cap_id FROM alerts WHERE status='pending' AND expires IS NOT NULL AND expires <= ?",(now(),)).fetchall()
         for r in rows:
             mark(c,r[0],"expired","local expiration")
+    # Only just-observed CAP revisions are considered.  There is intentionally
+    # no startup scan or persisted retry queue, so reconnects cannot flood mesh.
+    from .automatic import dispatch
+    for cap_id in created: dispatch(app,cap_id)
 
 def fetch(app):
     cfg=runtime_config(app.config,app.extensions["db"]); params=[]
@@ -148,6 +168,14 @@ def fetch(app):
             if known_family or eligible(feature,cfg):
                 features.append(feature)
         ingest(app,features)
+        # /alerts/active removes cancellations. Query the seven-day alerts
+        # history only when auto mode is on, constrained to the one-minute
+        # poll cadence and state filters. CAP references link cancellations.
+        if cfg.get("auto_sending_enabled"):
+            historic=requests.get(NWS.replace("/active",""),params=params+[("status","actual")],headers={"User-Agent":cfg["nws_user_agent"],"Accept":"application/geo+json"},timeout=15)
+            historic.raise_for_status()
+            cancels=[f for f in historic.json().get("features",[]) if str((f.get("properties") or {}).get("messageType","")).lower()=="cancel" and related_to_existing_alert(app.extensions["db"],f)]
+            ingest(app,cancels)
         app.extensions["db"].save_setting("nws_last_success",now())
         app.extensions["db"].save_setting("nws_last_error","")
     except Exception as exc:

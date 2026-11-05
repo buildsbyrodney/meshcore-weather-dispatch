@@ -17,6 +17,7 @@ from .coverage import fetch_catalog, CatalogError
 from .runtime import runtime_config, transmissions_enabled, contact_email, states
 from .alert_types import DEFAULT_ALERT_TYPES, category as alert_type_category, fetch_event_types, AlertTypeCatalogError
 from .updates import installed as installed_update, available as available_update, status as update_status, launch as launch_update
+from .db import now
 
 bp=Blueprint("console",__name__)
 def admin(fn):
@@ -88,7 +89,22 @@ def logout(): session.clear();return redirect(url_for("console.login"))
 @admin
 def index():
  db=current_app.extensions["db"];last,error,health=feed_state(db)
- return render_template("index.html",alerts=db.actionable(),history=history_for_display(db),cap=message_limit(current_app.config),last_sync=last,feed_error=error,feed_health=health,tx_channel=saved_channel(db),device_name=db.setting("device_name") or "unknown")
+ cfg=runtime_config(current_app.config,db)
+ return render_template("index.html",alerts=db.actionable(),history=history_for_display(db),cap=message_limit(current_app.config),last_sync=last,feed_error=error,feed_health=health,tx_channel=saved_channel(db),device_name=db.setting("device_name") or "unknown",auto_enabled=cfg["auto_sending_enabled"],auto_types=cfg["auto_warning_types"])
+@bp.post("/automatic-sending")
+@admin
+def automatic_sending():
+ db=current_app.extensions["db"];enable=request.form.get("automatic_enabled")=="yes"
+ if enable and request.form.get("confirm")!="yes":
+  flash("Automatic sending was not enabled: explicit confirmation is required.")
+  return redirect(url_for("console.index"))
+ if enable and not runtime_config(current_app.config,db)["auto_warning_types"]:
+  flash("Automatic sending was not enabled: select at least one monitored Warning in Settings first.")
+  return redirect(url_for("console.index"))
+ db.save_settings({"auto_sending_enabled":"true" if enable else "false","auto_dispatch_not_before":now()})
+ db.audit(None,"automatic_sending_changed",actor(),"enabled" if enable else "disabled")
+ flash("Automatic warning sending is ON. Only fresh selected warnings qualify." if enable else "Automatic warning sending is OFF.")
+ return redirect(url_for("console.index"))
 @bp.get("/api/state")
 @admin
 def state():
@@ -183,7 +199,8 @@ def settings():
   except RadioError as exc: channel_error=str(exc)
   try: radio_name=read_device_name(dev);db.save_setting("device_name",radio_name)
   except RadioError as exc: name_error=str(exc)
- return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,tx_enabled=cfg["transmit_enabled"],coverage_count=len(coverage),coverage_states=coverage_states,unsupported_coverage=unsupported,alert_type_count=len(cfg["alert_types"]),channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,radio_name=radio_name,cached_radio_name=cached_radio_name,name_error=name_error,timezones=valid_timezones(),timezone=app_timezone(db),nws_email=db.setting("nws_contact_email") or "",poll_seconds=cfg["poll_seconds"],nws_states=", ".join(cfg["states"]),web_tx_enabled=cfg["transmit_enabled"])
+ warning_types=[x for x in cfg["alert_types"] if alert_type_category(x)=="Warnings"]
+ return render_template("settings.html",devices=scan_devices(),saved=saved,status=status,tx_enabled=cfg["transmit_enabled"],coverage_count=len(coverage),coverage_states=coverage_states,unsupported_coverage=unsupported,alert_type_count=len(cfg["alert_types"]),channels=channels,discovery=discovery,tx_channel=saved_channel(db),channel_error=channel_error,radio_name=radio_name,cached_radio_name=cached_radio_name,name_error=name_error,timezones=valid_timezones(),timezone=app_timezone(db),nws_email=db.setting("nws_contact_email") or "",poll_seconds=cfg["poll_seconds"],nws_states=", ".join(cfg["states"]),web_tx_enabled=cfg["transmit_enabled"],auto_warning_types=cfg["auto_warning_types"],warning_types=warning_types)
 @bp.post("/settings/account")
 @admin
 def account_settings():
@@ -372,6 +389,16 @@ def select_timezone():
  db=current_app.extensions["db"];name=request.form.get("timezone","")
  if name not in valid_timezones(): flash("Time zone was not saved: invalid IANA time zone.")
  else: db.save_setting("timezone",name);flash(f"Time zone saved: {name}.")
+ return redirect(url_for("console.settings"))
+@bp.post("/settings/automatic-warning-types")
+@admin
+def automatic_warning_types():
+ db=current_app.extensions["db"];cfg=runtime_config(current_app.config,db);chosen=sorted(set(request.form.getlist("event")))
+ allowed={event for event in cfg["alert_types"] if alert_type_category(event)=="Warnings"}
+ if any(event not in allowed for event in chosen):
+  flash("Automatic warning types were not changed: choose only monitored NWS Warning types.")
+ else:
+  db.save_setting("auto_warning_types",json.dumps(chosen));db.audit(None,"automatic_warning_types_changed",actor(),f"{len(chosen)} warning types selected");flash(f"Automatic warning types saved: {len(chosen)} selected.")
  return redirect(url_for("console.settings"))
 @bp.post("/settings/channel")
 @admin

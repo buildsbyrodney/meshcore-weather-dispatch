@@ -7,7 +7,7 @@ SCHEMA = '''
 CREATE TABLE IF NOT EXISTS alerts (
  cap_id TEXT PRIMARY KEY, family_id TEXT, content_hash TEXT, revision_label TEXT, event TEXT NOT NULL, headline TEXT, description TEXT,
  areas TEXT, sent TEXT, effective TEXT, expires TEXT, status TEXT NOT NULL DEFAULT 'pending',
- message TEXT NOT NULL, replaces_id TEXT, raw_json TEXT, test_only INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+ message TEXT NOT NULL, replaces_id TEXT, raw_json TEXT, matched_areas TEXT NOT NULL DEFAULT '', test_only INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
  updated_at TEXT NOT NULL, claimed_by TEXT, claimed_at TEXT
 );
 CREATE TABLE IF NOT EXISTS audit (
@@ -52,14 +52,14 @@ class Database:
         with self.connect() as c:
             c.executescript(SCHEMA)
             columns={row[1] for row in c.execute("PRAGMA table_info(alerts)")}
-            for name, kind in (("family_id","TEXT"),("content_hash","TEXT"),("revision_label","TEXT"),("test_only","INTEGER NOT NULL DEFAULT 0")):
+            for name, kind in (("family_id","TEXT"),("content_hash","TEXT"),("revision_label","TEXT"),("matched_areas","TEXT NOT NULL DEFAULT ''"),("test_only","INTEGER NOT NULL DEFAULT 0")):
                 if name not in columns: c.execute(f"ALTER TABLE alerts ADD COLUMN {name} {kind}")
             c.execute("CREATE INDEX IF NOT EXISTS idx_alert_family ON alerts(family_id, created_at)")
     def bootstrap_operational_settings(self, config):
         """Seed web-managed values once; never overwrite an operator's changes."""
         from .alert_types import DEFAULT_ALERT_TYPES
         legacy_alerts=config.get("alert_types", DEFAULT_ALERT_TYPES)
-        values={"auth_username":config.get("admin_username", ""),"auth_password_hash":config.get("admin_password_hash", ""),"nws_states":json.dumps(config.get("states",[])),"nws_poll_seconds":str(max(60,int(config.get("poll_seconds",60)))),"nws_alert_types":json.dumps(legacy_alerts),"transmit_enabled":"true" if config.get("transmit_enabled",True) else "false"}
+        values={"auth_username":config.get("admin_username", ""),"auth_password_hash":config.get("admin_password_hash", ""),"nws_states":json.dumps(config.get("states",[])),"nws_poll_seconds":str(max(60,int(config.get("poll_seconds",60)))),"nws_alert_types":json.dumps(legacy_alerts),"transmit_enabled":"true" if config.get("transmit_enabled",True) else "false","auto_sending_enabled":"false","auto_warning_types":"[]"}
         candidate=str(config.get("nws_user_agent","")).rsplit(" ",1)[-1].strip("() ")
         if "@" in candidate: values["nws_contact_email"]=candidate
         with self.connect() as c:
@@ -117,6 +117,9 @@ class Database:
     def family_rows(self, family_id):
         with self.connect() as c:
             return c.execute("SELECT * FROM alerts WHERE family_id=? ORDER BY created_at",(family_id,)).fetchall()
+    def family_was_auto_sent(self, family_id):
+        with self.connect() as c:
+            return bool(c.execute("SELECT 1 FROM audit JOIN alerts ON alerts.cap_id=audit.cap_id WHERE alerts.family_id=? AND audit.action='auto_sent' LIMIT 1",(family_id,)).fetchone())
     def active_family_rows(self, family_id):
         with self.connect() as c:
             return c.execute("SELECT * FROM alerts WHERE family_id=? AND status IN ('pending','sending')",(family_id,)).fetchall()
