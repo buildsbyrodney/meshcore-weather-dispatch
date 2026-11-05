@@ -119,7 +119,7 @@ def ingest(app, features):
                     label="Updated Warning — Previously Sent" if "sent" in prior_statuses else ("Updated Warning — Previously Ignored" if "ignored" in prior_statuses else ("Updated Warning" if prior_rows else "New Warning"))
             if iso_past(p.get("expires")): status="expired"
             if test_only: label=f"TEST ONLY — {label}"
-            message=radio_message(f,cfg.get("timezone","UTC"))
+            message=radio_message(f,db.setting("timezone") or cfg.get("timezone","UTC"))
             c.execute("INSERT INTO alerts(cap_id,family_id,content_hash,revision_label,event,headline,description,areas,sent,effective,expires,status,message,replaces_id,raw_json,test_only,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(cap_id,family_id,fingerprint,label,p.get("event",""),p.get("headline"),p.get("description"),p.get("areaDesc"),p.get("sent"),p.get("effective"),p.get("expires"),status,message,references[0] if references else None,json.dumps(f),int(test_only),now(),now()))
             c.execute("INSERT INTO audit(cap_id,action,detail,message,created_at) VALUES(?,?,?,?,?)",(cap_id,status,label,message,now()))
     with db.connect() as c:

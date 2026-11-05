@@ -1,6 +1,6 @@
 from __future__ import annotations
-import re
-from .timefmt import local_time
+from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 class MessageError(ValueError): pass
 
@@ -11,13 +11,30 @@ def truncate_utf8(text: str, cap: int) -> str:
     keep = max(0, cap - len(ellipsis))
     return encoded[:keep].decode("utf-8", "ignore").rstrip() + "…"
 
+def _expiration_label(value, timezone_name: str) -> str:
+    """Render an NWS expiry in the configured local zone without guessing."""
+    if not value:
+        return "unavailable"
+    try:
+        parsed=datetime.fromisoformat(str(value).replace("Z","+00:00"))
+        if parsed.tzinfo is None:
+            return "unavailable"
+        local=parsed.astimezone(ZoneInfo(timezone_name))
+    except (TypeError, ValueError, ZoneInfoNotFoundError):
+        return "unavailable"
+    hour=local.hour % 12 or 12
+    abbreviation=local.tzname()
+    if not abbreviation:
+        return "unavailable"
+    return f"{local.strftime('%B')} {local.day} at {hour}:{local.strftime('%M')}{local.strftime('%p')} {abbreviation}"
+
 def radio_message(feature: dict, timezone_name="UTC") -> str:
     props = feature["properties"]
-    event = props.get("event", "Weather alert").upper();areas=" ".join(str(props.get("areaDesc") or "configured area").split())
+    event=" ".join(str(props.get("event") or "Weather alert").split()).upper()
     prefix="TEST ONLY " if props.get("test_only") else ""
-    text=f"{prefix}{event}: {areas}. Expires {local_time(props.get('expires'),timezone_name)}."
-    headline="" if props.get("test_only") else " ".join(str(props.get("headline") or "").split())
-    return text+(f" {headline}" if headline and headline.casefold() not in text.casefold() else "")
+    text=f"{prefix}{event} Expires {_expiration_label(props.get('expires'),timezone_name)}"
+    office=" ".join(str(props.get("senderName") or "").split())
+    return f"{text} by {office}" if office else text
 
 def append_comment(base: str, comment: str, byte_cap: int) -> str:
     if len(base.encode("utf-8")) > byte_cap:
