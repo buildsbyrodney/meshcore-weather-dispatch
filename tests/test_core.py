@@ -289,6 +289,45 @@ def test_ignore_requires_one_time_server_confirmation(tmp_path):
  client.post("/alerts/new/ignore",data=data)
  assert db.get("new")["status"]=="ignored"
 
+def test_reopen_regenerates_current_preview_in_saved_timezone_and_preserves_ignore_audit(tmp_path,monkeypatch):
+ cfg=config(tmp_path);cfg["max_message_bytes"]=180;app=create_app(cfg);db=app.extensions["db"];client=app.test_client()
+ f=feature();f["properties"].update({"event":"Dense Fog Advisory","expires":"2099-11-05T15:00:00+00:00","senderName":"NWS Birmingham AL","areaDesc":", ".join(f"County {n}" for n in range(25))})
+ ingest(app,[f]);db.finish("new","ignored","operator")
+ with db.connect() as c:c.execute("UPDATE alerts SET message='obsolete county-list preview' WHERE cap_id='new'")
+ db.save_setting("timezone","America/Chicago")
+ with client.session_transaction() as s:s["user"]="admin"
+ page=client.get("/").data.decode();assert "Reopen" in page and "ignored" in page
+ token=csrf_token(client);preview=client.post("/alerts/new/reopen-preview",data={"csrf_token":token}).get_json()
+ assert preview["message"]=="DENSE FOG ADVISORY Expires November 5 at 9:00AM CST by NWS Birmingham AL"
+ monkeypatch.setattr("dispatch.routes.send",lambda *a: (_ for _ in ()).throw(AssertionError("reopen must not transmit")))
+ response=client.post("/alerts/new/reopen",data={"csrf_token":token,"confirm":"yes","reopen_token":preview["token"]},follow_redirects=True)
+ assert response.status_code==200 and db.get("new")["status"]=="pending" and db.get("new")["message"]==preview["message"]
+ actions=[x["action"] for x in db.history() if x["cap_id"]=="new"]
+ assert "ignored" in actions and "reopened" in actions
+
+def test_reopen_refuses_expired_and_newer_or_canceled_revisions(tmp_path):
+ app=create_app(config(tmp_path));db=app.extensions["db"];client=app.test_client()
+ with client.session_transaction() as s:s["user"]="admin"
+ ingest(app,[feature("expired",expires="2000-01-01T00:00:00+00:00")]);db.finish("expired","ignored","operator")
+ token=csrf_token(client)
+ assert client.post("/alerts/expired/reopen-preview",data={"csrf_token":token}).status_code==409
+ ingest(app,[feature("old")]);db.finish("old","ignored","operator")
+ ingest(app,[feature("new","sender,old,when",description="changed")])
+ assert db.get("old")["status"]=="ignored"
+ assert client.post("/alerts/old/reopen-preview",data={"csrf_token":token}).status_code==409
+ ingest(app,[feature("cancel","sender,new,when",kind="Cancel")])
+ assert db.get("new")["status"]=="canceled" and client.post("/alerts/old/reopen-preview",data={"csrf_token":token}).status_code==409
+
+def test_reopen_confirmation_is_csrf_protected_and_one_time(tmp_path):
+ app=create_app(config(tmp_path));db=app.extensions["db"];client=app.test_client();ingest(app,[feature()]);db.finish("new","ignored","operator")
+ with client.session_transaction() as s:s["user"]="admin"
+ token=csrf_token(client);preview=client.post("/alerts/new/reopen-preview",data={"csrf_token":token}).get_json()
+ assert client.post("/alerts/new/reopen",data={"confirm":"yes","reopen_token":preview["token"]}).status_code==400
+ assert db.get("new")["status"]=="ignored"
+ data={"csrf_token":token,"confirm":"yes","reopen_token":preview["token"]}
+ client.post("/alerts/new/reopen",data=data);client.post("/alerts/new/reopen",data=data)
+ assert db.get("new")["status"]=="pending" and [x["action"] for x in db.history() if x["cap_id"]=="new"].count("reopened")==1
+
 def test_repeated_nws_polling_is_idempotent_and_healthy(tmp_path,monkeypatch):
  app=create_app(config(tmp_path)); calls=[]
  class Response:

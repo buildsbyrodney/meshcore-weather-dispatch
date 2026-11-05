@@ -28,6 +28,18 @@ CREATE TABLE IF NOT EXISTS dispatch_previews (jti TEXT PRIMARY KEY, consumed_at 
 
 def now() -> str: return datetime.now(timezone.utc).isoformat()
 
+def reopen_error(c, row):
+    if not row or row["status"]!="ignored" or row["test_only"]:
+        return "alert is no longer an ignored NWS alert"
+    try:
+        expires=datetime.fromisoformat(row["expires"].replace("Z","+00:00"))
+        if expires.tzinfo is None or expires.astimezone(timezone.utc)<=datetime.now(timezone.utc):
+            return "alert has expired"
+    except (AttributeError, TypeError, ValueError):
+        return "alert expiration is invalid; refusing to reopen"
+    newer=c.execute("SELECT 1 FROM alerts WHERE family_id=? AND test_only=0 AND rowid>? LIMIT 1",(row["family_id"] or row["cap_id"],row["rowid"])).fetchone()
+    return "a newer alert revision makes this ignored alert stale" if newer else None
+
 class Database:
     def __init__(self, path: str): self.path = path
     @contextmanager
@@ -110,7 +122,7 @@ class Database:
             return c.execute("SELECT * FROM alerts WHERE family_id=? AND status IN ('pending','sending')",(family_id,)).fetchall()
     def history(self):
         with self.connect() as c:
-            return c.execute("SELECT * FROM audit ORDER BY id DESC LIMIT 200").fetchall()
+            return c.execute("SELECT audit.*, alerts.status AS alert_status, alerts.test_only AS alert_test_only FROM audit LEFT JOIN alerts ON alerts.cap_id=audit.cap_id ORDER BY audit.id DESC LIMIT 200").fetchall()
     def claim(self, cap_id: str, actor: str) -> bool:
         """The conditional UPDATE is the cross-request transmit lock."""
         with self.connect() as c:
@@ -135,6 +147,21 @@ class Database:
         if row and row["test_only"]:
             detail=f"TEST ONLY — {detail or status}"
         self.audit(cap_id, status, actor, detail, message)
+    def reopen(self, cap_id, actor, message):
+        """Return only the current ignored NWS revision to manual review."""
+        with self.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            row=c.execute("SELECT rowid,* FROM alerts WHERE cap_id=?",(cap_id,)).fetchone()
+            if error:=reopen_error(c,row):
+                c.execute("ROLLBACK"); return error
+            stamp=now()
+            c.execute("UPDATE alerts SET status='pending',message=?,claimed_by=NULL,claimed_at=NULL,updated_at=? WHERE cap_id=?",(message,stamp,cap_id))
+            c.execute("INSERT INTO audit(cap_id,action,actor,detail,message,created_at) VALUES(?,?,?,?,?,?)",(cap_id,"reopened",actor,"reopened from ignored history for manual review",message,stamp))
+            c.execute("COMMIT")
+            return None
+    def reopen_error(self, cap_id):
+        with self.connect() as c:
+            return reopen_error(c,c.execute("SELECT rowid,* FROM alerts WHERE cap_id=?",(cap_id,)).fetchone())
     def get(self, cap_id):
         with self.connect() as c: return c.execute("SELECT * FROM alerts WHERE cap_id=?", (cap_id,)).fetchone()
     def save_setting(self, key, value):
