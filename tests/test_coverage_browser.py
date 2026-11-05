@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import json
 from ctypes.util import find_library
 
 import pytest
@@ -27,6 +28,7 @@ def browser_config(tmp_path):
         "transmit_enabled": False,
         "poll_seconds": 60,
         "start_poller": False,
+        "update_state_dir": str(tmp_path / "updates"),
     }
 
 
@@ -278,6 +280,51 @@ def test_software_updates_page_is_compact_and_requires_confirmation(tmp_path, mo
                 assert page.locator('input[name="confirm"]').count() == 2
                 assert page.locator('input[name="command"]').count() == 0
                 assert page.get_by_role("button", name="Install Update").is_disabled() is False
+                context.close()
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+def test_software_update_console_hides_only_a_prior_successful_run(tmp_path, monkeypatch):
+    """A fresh visit clears completed output, while live and failed output remains useful."""
+    if not find_library("nspr4"):
+        pytest.skip("Chromium runtime libraries are unavailable in this local environment")
+    config = browser_config(tmp_path)
+    state = tmp_path / "updates"
+    state.mkdir()
+    def write_update(status, message, log):
+        (state / "status.json").write_text(json.dumps({"status": status, "message": message}))
+        (state / "update.log").write_text(log)
+    write_update("success", "Update completed", "previous successful output")
+    app = create_app(config)
+    monkeypatch.setattr("dispatch.routes.available_update", lambda: {"available": True, "commit": "a" * 40, "error": None})
+    server = make_server("127.0.0.1", 0, app)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            try:
+                context = browser.new_context()
+                page = context.new_page()
+                page.goto(f"http://127.0.0.1:{server.server_port}/login")
+                page.fill('input[name="username"]', "admin")
+                page.fill('input[name="password"]', "browser-password")
+                page.click('button:has-text("Sign in")')
+                page.goto(f"http://127.0.0.1:{server.server_port}/settings/software-updates")
+                assert page.locator("#update-console").inner_text() == ""
+                write_update("running", "Update running", "live update output")
+                page.wait_for_function("document.querySelector('#update-console').textContent === 'live update output'")
+                write_update("success", "Update completed", "new successful output")
+                page.wait_for_function("document.querySelector('#update-console').textContent === 'new successful output'")
+                page.goto(f"http://127.0.0.1:{server.server_port}/settings")
+                page.goto(f"http://127.0.0.1:{server.server_port}/settings/software-updates")
+                assert page.locator("#update-console").inner_text() == ""
+                write_update("failed", "Update failed; see console", "failure details")
+                page.reload()
+                assert page.locator("#update-console").inner_text() == "failure details"
                 context.close()
             finally:
                 browser.close()

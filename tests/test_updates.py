@@ -1,6 +1,8 @@
 from dispatch import create_app
 from dispatch import updates
 import subprocess
+import json
+from pathlib import Path
 def config(tmp_path, calls): return {"TESTING":True,"secret_key":"test","database":str(tmp_path/"u.sqlite"),"admin_username":"admin","admin_password_hash":"scrypt:32768:8:1$X$C8YciwLCAazhj6PeXTvoUHl0LTB7qm4JzB47lqYsOiwD9sEzKJzQx9QHdT1yTQ","nws_user_agent":"x@example.org","states":["AL"],"counties":[],"max_message_bytes":80,"poll_seconds":60,"start_poller":False,"update_helper":lambda action:calls.append(action),"update_state_dir":str(tmp_path/"updates")}
 def token(client): return client.get('/settings/software-updates').data.decode().split('name="csrf_token" value="')[1].split('"')[0]
 def test_update_and_reboot_require_confirmation_and_use_fixed_helper(tmp_path,monkeypatch):
@@ -35,3 +37,29 @@ def test_update_endpoints_require_an_authenticated_csrf_session(tmp_path):
  app=create_app(config(tmp_path,[]));client=app.test_client()
  assert client.get('/settings/software-updates').status_code==302
  assert client.post('/settings/software-updates/install',data={'confirm':'yes'}).status_code==400
+
+def test_completed_update_output_is_hidden_on_a_fresh_visit_but_preserved_for_the_status_api(tmp_path):
+ calls=[];cfg=config(tmp_path,calls);state=tmp_path/"updates";state.mkdir()
+ (state/"status.json").write_text(json.dumps({"status":"success","message":"Update completed"}))
+ (state/"update.log").write_text("previous successful update output")
+ app=create_app(cfg);client=app.test_client()
+ with client.session_transaction() as s:s['user_id']=app.extensions['db'].user('admin')['id']
+ page=client.get('/settings/software-updates').data.decode()
+ assert '<pre id="update-console" aria-live="polite"></pre>' in page
+ assert client.get('/api/software-updates').json['log']=='previous successful update output'
+
+def test_running_and_failed_update_output_remain_visible_on_page_load(tmp_path):
+ for status,message in (("running","Update running"),("failed","Update failed; see console")):
+  calls=[];cfg=config(tmp_path,calls);state=tmp_path/status;state.mkdir()
+  cfg["update_state_dir"]=str(state)
+  (state/"status.json").write_text(json.dumps({"status":status,"message":message}))
+  (state/"update.log").write_text(f"{status} output")
+  app=create_app(cfg);client=app.test_client()
+  with client.session_transaction() as s:s['user_id']=app.extensions['db'].user('admin')['id']
+  assert f"{status} output" in client.get('/settings/software-updates').data.decode()
+
+def test_update_console_polling_distinguishes_the_prior_success_from_a_new_run():
+ template=(Path(__file__).parents[1]/"dispatch/templates/software_updates.html").read_text()
+ assert "observedCurrentUpdate=initialStatus==='running'" in template
+ assert "log!==initialLog" in template
+ assert "lastStatus!=='success'" in template
