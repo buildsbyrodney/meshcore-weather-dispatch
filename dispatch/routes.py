@@ -103,7 +103,6 @@ def automatic_sending():
   return redirect(url_for("console.index"))
  db.save_settings({"auto_sending_enabled":"true" if enable else "false","auto_dispatch_not_before":now()})
  db.audit(None,"automatic_sending_changed",actor(),"enabled" if enable else "disabled")
- flash("Automatic warning sending is ON. Only fresh selected warnings qualify." if enable else "Automatic warning sending is OFF.")
  return redirect(url_for("console.index"))
 @bp.get("/api/state")
 @admin
