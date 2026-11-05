@@ -122,7 +122,7 @@ class Database:
             return c.execute("SELECT * FROM alerts WHERE family_id=? AND status IN ('pending','sending')",(family_id,)).fetchall()
     def history(self):
         with self.connect() as c:
-            return c.execute("SELECT audit.*, alerts.status AS alert_status, alerts.test_only AS alert_test_only FROM audit LEFT JOIN alerts ON alerts.cap_id=audit.cap_id ORDER BY audit.id DESC LIMIT 200").fetchall()
+            return c.execute("SELECT audit.*, alerts.status AS alert_status, alerts.test_only AS alert_test_only, alerts.raw_json, alerts.message AS alert_message FROM audit LEFT JOIN alerts ON alerts.cap_id=audit.cap_id ORDER BY audit.id DESC LIMIT 200").fetchall()
     def claim(self, cap_id: str, actor: str) -> bool:
         """The conditional UPDATE is the cross-request transmit lock."""
         with self.connect() as c:

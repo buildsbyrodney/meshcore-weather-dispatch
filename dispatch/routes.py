@@ -58,6 +58,19 @@ def final_alert_message(alert, comment=""):
  return append_comment(radio_message(json.loads(alert["raw_json"]),app_timezone(current_app.extensions["db"])),comment,current_app.config.get("max_message_bytes",180))
 def reopened_alert_message(alert):
  return append_comment(radio_message(json.loads(alert["raw_json"]),app_timezone(current_app.extensions["db"])),"",current_app.config.get("max_message_bytes",180))
+def history_for_display(db):
+ """Add a safe display value while preserving the original audit evidence."""
+ rows=[]
+ for audit in db.history():
+  row=dict(audit); message=""
+  if row.get("raw_json"):
+   try: message=radio_message(json.loads(row["raw_json"]),app_timezone(db))
+   except (MessageError, TypeError, ValueError, KeyError, json.JSONDecodeError): pass
+  # Legacy rows can lack CAP JSON; use their existing preview without editing it.
+  if not message: message=row.get("message") or row.get("alert_message") or ""
+  row["alert_display"]=message or row.get("cap_id") or "Alert unavailable"
+  rows.append(row)
+ return rows
 def preview_signer(): return URLSafeTimedSerializer(current_app.config["SECRET_KEY"],salt="dispatch-preview-v1")
 
 @bp.route("/login",methods=["GET","POST"])
@@ -75,11 +88,11 @@ def logout(): session.clear();return redirect(url_for("console.login"))
 @admin
 def index():
  db=current_app.extensions["db"];last,error,health=feed_state(db)
- return render_template("index.html",alerts=db.actionable(),history=db.history(),cap=message_limit(current_app.config),last_sync=last,feed_error=error,feed_health=health,tx_channel=saved_channel(db),device_name=db.setting("device_name") or "unknown")
+ return render_template("index.html",alerts=db.actionable(),history=history_for_display(db),cap=message_limit(current_app.config),last_sync=last,feed_error=error,feed_health=health,tx_channel=saved_channel(db),device_name=db.setting("device_name") or "unknown")
 @bp.get("/api/state")
 @admin
 def state():
- db=current_app.extensions["db"];alerts=db.actionable();history=db.history();last,error,health=feed_state(db)
+ db=current_app.extensions["db"];alerts=db.actionable();history=history_for_display(db);last,error,health=feed_state(db)
  return jsonify(alerts_html=render_template("_alerts.html",alerts=alerts,cap=current_app.config.get("max_message_bytes",180),tx_channel=saved_channel(db)),history_html=render_template("_history.html",history=history),nws_last_success=last,nws_last_success_display=local_time(last,app_timezone(db)),nws_last_error=error,feed_health=health)
 @bp.post("/alerts/<cap_id>/ignore")
 @admin
