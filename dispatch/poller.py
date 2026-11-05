@@ -23,7 +23,7 @@ def coverage_counties(cfg) -> list[dict]:
     """Return configured coverage choices without inventing county identities."""
     db=cfg.get("coverage_db")
     if db is not None:
-        return [{"id":f"same:{r['same']}|ugc:{r['ugc']}","label":f"{r['name']}, {r['state']}","same":[r["same"]],"ugc":[r["ugc"]]} for r in db.coverage()]
+        return [{"id":f"same:{r['same']}|ugc:{r['ugc']}","label":r["name"] if str(r["name"]).endswith(f", {r['state']}") else f"{r['name']}, {r['state']}","same":[r["same"]],"ugc":[r["ugc"]]} for r in db.coverage()]
     choices=[]; seen=set()
     for value in cfg.get("counties",[]):
         if isinstance(value,dict):
@@ -133,7 +133,8 @@ def ingest(app, features):
                 areas=(prior[0].split("|") if prior else [])
             # Store the formatter facts alongside the retained CAP feature;
             # this avoids ever inferring county names from prose or polygons.
-            p["_mesh_matched_areas"]="|".join(areas);p["_mesh_kind"]=kind
+            if not test_only:
+                p["_mesh_matched_areas"]="|".join(areas);p["_mesh_kind"]=kind
             message=radio_message(f,db.setting("timezone") or cfg.get("timezone","UTC"))
             c.execute("INSERT INTO alerts(cap_id,family_id,content_hash,revision_label,event,headline,description,areas,sent,effective,expires,status,message,replaces_id,raw_json,matched_areas,test_only,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(cap_id,family_id,fingerprint,label,p.get("event",""),p.get("headline"),p.get("description"),p.get("areaDesc"),p.get("sent"),p.get("effective"),p.get("expires"),status,message,references[0] if references else None,json.dumps(f),"|".join(areas),int(test_only),now(),now()))
             c.execute("INSERT INTO audit(cap_id,action,detail,message,created_at) VALUES(?,?,?,?,?)",(cap_id,status,label,message,now()))
