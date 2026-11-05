@@ -1,0 +1,13 @@
+[Unit]
+Description=MeshCore Weather Dispatch guarded update request socket
+
+[Socket]
+ListenStream=/run/meshcore-weather-dispatch/update.sock
+SocketUser=weatherdispatch
+SocketGroup=weatherdispatch
+SocketMode=0660
+Accept=yes
+Service=meshcore-weather-dispatch-update@.service
+
+[Install]
+WantedBy=sockets.target

@@ -20,13 +20,18 @@ def test_missing_managed_checkout_reports_unavailable_instead_of_crashing(monkey
  monkeypatch.setattr(updates,"APP","/path/that-does-not-exist")
  assert updates.installed()["commit"]=="unavailable"
  assert updates.available()["error"]=="Unable to check GitHub for updates."
-def test_production_helper_invocation_uses_only_fixed_no_argument_commands(monkeypatch):
+def test_production_update_request_uses_only_the_guarded_socket(monkeypatch):
  calls=[]
- def fixed(args,cwd=None):
-  calls.append((args,cwd));return subprocess.CompletedProcess(args,0,"","")
- monkeypatch.setattr(updates,"_run",fixed)
+ class Socket:
+  def __enter__(self): return self
+  def __exit__(self,*args): pass
+  def settimeout(self,value): calls.append(("timeout",value))
+  def connect(self,value): calls.append(("connect",value))
+  def sendall(self,value): calls.append(("send",value))
+  def recv(self,value): return b"accepted\n"
+ monkeypatch.setattr(updates.socket,"socket",lambda *args:Socket())
  updates.launch({});updates.launch({},reboot=True)
- assert calls==[(["sudo","-n",updates.UPDATE_HELPER],"/"),(["sudo","-n",updates.REBOOT_HELPER],"/")]
+ assert calls==[("timeout",5),("connect",updates.UPDATE_SOCKET),("send",b"update\n"),("timeout",5),("connect",updates.UPDATE_SOCKET),("send",b"reboot\n")]
 def test_update_endpoints_require_an_authenticated_csrf_session(tmp_path):
  app=create_app(config(tmp_path,[]));client=app.test_client()
  assert client.get('/settings/software-updates').status_code==302

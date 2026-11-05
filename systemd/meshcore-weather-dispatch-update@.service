@@ -1,0 +1,16 @@
+[Unit]
+Description=MeshCore Weather Dispatch guarded update worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/libexec/meshcore-weather-dispatch-update-worker
+StandardInput=socket
+StandardOutput=socket
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/opt/meshcore-weather-dispatch /etc/meshcore-weather-dispatch /var/lib/meshcore-weather-dispatch /var/backups/meshcore-weather-dispatch /etc/systemd/system /etc/nginx /usr/local/libexec

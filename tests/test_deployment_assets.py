@@ -9,6 +9,20 @@ def test_nginx_keeps_gunicorn_loopback_only_and_forwards_required_headers():
     assert "listen 80 default_server" in config and "proxy_pass http://127.0.0.1:8080" in config
     assert "X-Forwarded-Proto" in config and "client_max_body_size 64k" in config
     assert "--workers 1" in service and "--bind 127.0.0.1:8080" in service and "--worker-tmp-dir /dev/shm" in service and "--no-control-socket" in service and "nginx.service" in service
+    assert "NoNewPrivileges=true" in service and "User=weatherdispatch" in service
+
+def test_web_updates_use_a_fixed_socket_activated_root_worker_without_sudo():
+    socket=(ROOT/"systemd"/"meshcore-weather-dispatch-update.socket").read_text()
+    worker=(ROOT/"systemd"/"meshcore-weather-dispatch-update@.service").read_text()
+    script=(ROOT/"scripts"/"systemd-update-worker.sh").read_text()
+    install=(ROOT/"scripts"/"install.sh").read_text(); update=(ROOT/"scripts"/"update.sh").read_text()
+    assert "SocketUser=weatherdispatch" in socket and "SocketMode=0660" in socket and "Accept=yes" in socket
+    assert "User=root" in worker and "StandardInput=socket" in worker and "StandardOutput=socket" in worker
+    assert 'case "$request" in update|reboot)' in script and "flock -n" in script
+    assert "systemctl stop meshcore-weather-dispatch" in script
+    assert "NOPASSWD" not in install
+    assert "NOPASSWD" not in update
+    assert "meshcore-weather-dispatch-update.socket" in install and "meshcore-weather-dispatch-update.socket" in update
 
 def test_install_and_update_scripts_keep_port_80_and_existing_sites_safe():
     install=(ROOT/"scripts"/"install.sh").read_text(); update=(ROOT/"scripts"/"update.sh").read_text()

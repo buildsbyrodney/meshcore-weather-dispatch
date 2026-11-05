@@ -42,6 +42,14 @@ jobs:
           # Exercise too-short and mismatched passwords before a successful confirmation.
           printf 'ciadmin\nci@example.invalid\nAL\nshort\nshort\nsimple\ndifferent\nci-password-long-enough\nci-password-long-enough\n' | sudo -E bash "$GITHUB_WORKSPACE/scripts/install.sh"
           sudo systemctl is-active --quiet nginx meshcore-weather-dispatch
+          sudo systemctl is-active --quiet meshcore-weather-dispatch-update.socket
+          sudo test -S /run/meshcore-weather-dispatch/update.sock
+          # Gunicorn's account may request only a fixed operation; arbitrary input is rejected.
+          sudo -u weatherdispatch python3 - <<'PY'
+          import socket
+          s=socket.socket(socket.AF_UNIX); s.connect('/run/meshcore-weather-dispatch/update.sock'); s.sendall(b'nope\n')
+          assert s.recv(64)==b'rejected\n'
+          PY
           sudo ss -ltn | grep -q '127.0.0.1:8080'
           ! sudo ss -ltn | grep -qE '0\.0\.0\.0:8080|\[::\]:8080'
           sudo test -d /opt/meshcore-weather-dispatch/.git
