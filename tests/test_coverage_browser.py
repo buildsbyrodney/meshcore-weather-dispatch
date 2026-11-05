@@ -331,3 +331,56 @@ def test_software_update_console_hides_only_a_prior_successful_run(tmp_path, mon
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+def test_automatic_sending_control_confirms_before_enabling_and_warning_types_stay_aligned(tmp_path):
+    if not find_library("nspr4"):
+        pytest.skip("Chromium runtime libraries are unavailable in this local environment")
+    app = create_app(browser_config(tmp_path))
+    db = app.extensions["db"]
+    db.save_setting("auto_warning_types", '["Tornado Warning"]')
+    server = make_server("127.0.0.1", 0, app)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            try:
+                context = browser.new_context(viewport={"width": 375, "height": 667})
+                page = context.new_page()
+                page.goto(f"http://127.0.0.1:{server.server_port}/login")
+                page.fill('input[name="username"]', "admin")
+                page.fill('input[name="password"]', "browser-password")
+                page.click('button:has-text("Sign in")')
+                page.goto(f"http://127.0.0.1:{server.server_port}/")
+                assert page.locator(".automatic-status").inner_text().startswith("Automatic Sending")
+                assert page.locator(".automatic-status .tag").inner_text() == "OFF"
+                assert page.locator('#automatic-sending-form input[type="checkbox"]').count() == 0
+                page.get_by_role("button", name="Turn ON").click()
+                assert page.locator("#automatic-dialog").evaluate("dialog => dialog.open")
+                page.get_by_role("button", name="Cancel").click()
+                assert db.setting("auto_sending_enabled") == "false"
+                page.get_by_role("button", name="Turn ON").click()
+                page.get_by_role("button", name="Enable Automatic Sending").click()
+                page.wait_for_function("document.querySelector('.automatic-status .tag').textContent === 'ON'")
+                assert db.setting("auto_sending_enabled") == "true"
+                page.get_by_role("button", name="Turn OFF").click()
+                page.wait_for_function("document.querySelector('.automatic-status .tag').textContent === 'OFF'")
+                assert db.setting("auto_sending_enabled") == "false"
+                page.goto(f"http://127.0.0.1:{server.server_port}/settings")
+                choice = page.locator(".automatic-check").first
+                checkbox = choice.locator('input[type="checkbox"]')
+                label = choice.locator("span")
+                checkbox_box, label_box = checkbox.bounding_box(), label.bounding_box()
+                assert checkbox.is_checked()
+                assert checkbox_box["x"] < label_box["x"] and abs(checkbox_box["y"] - label_box["y"]) < 8
+                checkbox.uncheck()
+                page.get_by_role("button", name="Save automatic warning types").click()
+                assert db.setting("auto_warning_types") == "[]"
+                page.reload()
+                assert page.locator(".automatic-check input").is_checked() is False
+                context.close()
+            finally:
+                browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)

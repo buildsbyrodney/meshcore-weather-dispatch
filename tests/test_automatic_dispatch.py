@@ -19,12 +19,27 @@ def csrf(client): return client.get("/").data.decode().split('name="csrf_token" 
 def test_console_switch_defaults_off_requires_confirmation_and_persists(tmp_path):
     app=create_app(config(tmp_path));db=app.extensions["db"];client=app.test_client()
     with client.session_transaction() as session: session["user_id"]=db.user("admin")["id"]
-    assert "Automatic Sending: OFF" in client.get("/").data.decode()
+    page=client.get("/").data.decode()
+    assert "Automatic Sending" in page and ">OFF<" in page and "Turn ON" in page
+    assert "Automatic sending is disabled. Alerts remain available for manual review." not in page
+    assert "Selected automatic warning types:" not in page
     client.post("/automatic-sending",data={"csrf_token":csrf(client),"automatic_enabled":"yes"})
     assert db.setting("auto_sending_enabled")=="false"
     db.save_setting("auto_warning_types",'["Tornado Warning"]')
     client.post("/automatic-sending",data={"csrf_token":csrf(client),"automatic_enabled":"yes","confirm":"yes"})
     assert db.setting("auto_sending_enabled")=="true" and create_app(config(tmp_path)).extensions["db"].setting("auto_sending_enabled")=="true"
+
+def test_automatic_warning_type_selection_remains_checked_and_is_server_validated(tmp_path):
+    app=create_app(config(tmp_path));db=app.extensions["db"];client=app.test_client()
+    with client.session_transaction() as session: session["user_id"]=db.user("admin")["id"]
+    db.save_setting("auto_warning_types",'["Tornado Warning"]')
+    page=client.get("/settings").data.decode()
+    assert 'class="automatic-warning-list"' in page
+    assert 'value="Tornado Warning" checked' in page
+    client.post("/settings/automatic-warning-types",data={"csrf_token":csrf(client),"event":"Tornado Warning"})
+    assert db.setting("auto_warning_types")=="[\"Tornado Warning\"]"
+    client.post("/settings/automatic-warning-types",data={"csrf_token":csrf(client),"event":"Tornado Watch"})
+    assert db.setting("auto_warning_types")=="[\"Tornado Warning\"]"
 
 def test_auto_is_off_by_default_and_uses_only_matching_counties(tmp_path,monkeypatch):
     app=create_app(config(tmp_path));sent=[]
