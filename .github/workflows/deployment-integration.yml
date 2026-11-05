@@ -240,7 +240,7 @@ jobs:
           curl -fsSI http://127.0.0.1/ | grep -qi HTTP/
           # A failed web update must restore the previous checkout and install
           # from the protected dependency snapshot without exposing the backup.
-          sudo -u weatherdispatch sh -c 'cd /opt/meshcore-weather-dispatch && printf "\\ninvalid nginx directive;\\n" >> nginx/meshcore-weather-dispatch.conf && git add nginx/meshcore-weather-dispatch.conf && git commit -m "ci intentionally invalid web update" && git push origin HEAD:main'
+          sudo -u weatherdispatch sh -c 'cd /opt/meshcore-weather-dispatch && git config user.email integration@example.invalid && git config user.name integration && printf "\\ninvalid nginx directive;\\n" >> nginx/meshcore-weather-dispatch.conf && git add nginx/meshcore-weather-dispatch.conf && git commit -m "ci intentionally invalid web update" && git push origin HEAD:main'
           sudo -u weatherdispatch python3 - <<'PY'
           import socket
           s=socket.socket(socket.AF_UNIX); s.connect('/run/meshcore-weather-dispatch/update.sock'); s.sendall(b'update\n')
