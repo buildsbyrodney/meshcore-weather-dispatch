@@ -25,6 +25,12 @@ def test_web_updates_use_a_fixed_socket_activated_root_worker_without_sudo():
     assert "NOPASSWD" not in update
     assert "meshcore-weather-dispatch-update.socket" in install and "meshcore-weather-dispatch-update.socket" in update
 
+def test_staged_migration_checks_the_existing_installation_before_delegating_to_the_backed_up_updater():
+    migration=(ROOT/"scripts"/"migrate-web-updater.sh").read_text()
+    assert 'APP=/opt/meshcore-weather-dispatch' in migration
+    assert '[[ -d "$APP/.git" ]]' in migration and 'id weatherdispatch' in migration
+    assert 'exec "$(dirname "$0")/update.sh"' in migration
+
 def test_install_and_update_scripts_keep_port_80_and_existing_sites_safe():
     install=(ROOT/"scripts"/"install.sh").read_text(); update=(ROOT/"scripts"/"update.sh").read_text()
     assert "Port 80 is already in use" in install and "Existing Nginx site found at" in install

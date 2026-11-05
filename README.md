@@ -113,19 +113,13 @@ The Flask service remains unprivileged with `NoNewPrivileges=true`. It requests 
 
 ### One-time bootstrap for existing v1.0.0-rc.2 installations
 
-The older web updater cannot install this correction itself. On WXALERT, run these commands once from a trusted terminal (not from the web console). The application directory is deliberately not accessible to ordinary login users, so first open a root shell:
+The older web updater cannot install this correction itself. On WXALERT, run this one command once from a trusted terminal (not from the web console). It downloads the migration script to a temporary root-owned directory; the script creates the normal timestamped backup **before** changing the live checkout or Python environment:
 
 ```sh
-sudo -i
-cd /opt/meshcore-weather-dispatch
-sudo -u weatherdispatch git fetch origin main
-sudo -u weatherdispatch git checkout --detach origin/main
-sudo -u weatherdispatch /opt/meshcore-weather-dispatch/.venv/bin/pip install --upgrade -e /opt/meshcore-weather-dispatch
-/opt/meshcore-weather-dispatch/scripts/update.sh
-exit
+sudo bash -c 'set -e; d=$(mktemp -d); trap "rm -rf $d" EXIT; git clone --depth 1 --branch main https://github.com/buildsbyrodney/meshcore-weather-dispatch.git "$d"; "$d/scripts/migrate-web-updater.sh"'
 ```
 
-The update script restarts the application and enables the new request socket; no additional restart is required, and it does not reboot the Pi. Verify with `sudo systemctl status meshcore-weather-dispatch-update.socket --no-pager`. The update page can then perform future confirmed updates.
+The update script restarts the application and enables the new request socket; no additional restart is required, and it does not reboot the Pi. Verify with `sudo systemctl status meshcore-weather-dispatch-update.socket --no-pager`. The update page can then perform future confirmed updates. If it fails, the console names the backup directory; use the recovery procedure below and inspect `sudo journalctl -u meshcore-weather-dispatch -n 100 --no-pager`.
 
 The update worker uses the same backup and rollback procedure as the command below. It restarts the application after a completed update but never reboots automatically. A reboot is sometimes necessary after an update - follow the instructions in the console.
 
