@@ -48,10 +48,19 @@ def test_nws_settings_are_dynamic_and_do_not_discard_out_of_state_counties(tmp_p
 
 def test_account_change_requires_current_password_and_rehashes(tmp_path):
     app=create_app(cfg(tmp_path));db=app.extensions["db"];client=app.test_client();signed_in(client)
-    client.post("/settings/account",data={"csrf_token":token(client),"username":"newadmin","current_password":"wrong","new_password":"new-password-long","confirm_password":"new-password-long"})
+    page=client.get("/settings/users").data.decode()
+    assert "My Account" in page and "Change My Username or Password" in page
+    assert "Administrator Account" not in client.get("/settings").data.decode()
+    response=client.post("/settings/account",data={"csrf_token":token(client),"username":"newadmin","current_password":"wrong","new_password":"new-password-long","confirm_password":"new-password-long"})
+    assert response.location.endswith("/settings/users")
     assert db.credentials()[0]=="admin"
     client.post("/settings/account",data={"csrf_token":token(client),"username":"newadmin","current_password":"current-password","new_password":"new-password-long","confirm_password":"new-password-long"})
     user=db.user("newadmin",active_only=True);assert user and check_password_hash(user["password_hash"],"new-password-long")
+
+def test_current_user_cannot_bypass_current_password_via_user_edit(tmp_path):
+    app=create_app(cfg(tmp_path));db=app.extensions["db"];client=app.test_client();signed_in(client)
+    client.post("/settings/users/edit",data={"csrf_token":token(client),"target_id":db.user("admin")["id"],"username":"newadmin","password":"new-password-long","confirm_password":"new-password-long"})
+    assert db.credentials()[0]=="admin" and check_password_hash(db.credentials()[1],"current-password")
 
 def test_account_password_mismatch_is_rejected_and_simple_six_character_password_is_accepted(tmp_path):
     app=create_app(cfg(tmp_path));db=app.extensions["db"];client=app.test_client();signed_in(client)

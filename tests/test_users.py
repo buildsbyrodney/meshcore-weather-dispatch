@@ -36,7 +36,7 @@ def test_immutable_session_identity_survives_rename_but_not_username_reuse(tmp_p
  db.update_user(original_id,"renamed")
  # The same account ID remains authenticated and receives its current name.
  assert original.get("/settings").status_code==200
- assert b"renamed" in original.get("/settings").data
+ assert b"renamed" in original.get("/settings/users").data
  # A removed account's cookie never becomes valid for a replacement username.
  db.add_user("other",generate_password_hash("simple2"))
  db.remove_user(original_id)
