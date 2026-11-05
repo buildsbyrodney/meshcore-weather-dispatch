@@ -113,14 +113,16 @@ The Flask service remains unprivileged with `NoNewPrivileges=true`. It requests 
 
 ### One-time bootstrap for existing v1.0.0-rc.2 installations
 
-The older web updater cannot install this correction itself. On WXALERT, run these commands once from a trusted terminal (not from the web console):
+The older web updater cannot install this correction itself. On WXALERT, run these commands once from a trusted terminal (not from the web console). The application directory is deliberately not accessible to ordinary login users, so first open a root shell:
 
 ```sh
+sudo -i
 cd /opt/meshcore-weather-dispatch
 sudo -u weatherdispatch git fetch origin main
 sudo -u weatherdispatch git checkout --detach origin/main
 sudo -u weatherdispatch /opt/meshcore-weather-dispatch/.venv/bin/pip install --upgrade -e /opt/meshcore-weather-dispatch
-sudo /opt/meshcore-weather-dispatch/scripts/update.sh
+/opt/meshcore-weather-dispatch/scripts/update.sh
+exit
 ```
 
 The update script restarts the application and enables the new request socket; no additional restart is required, and it does not reboot the Pi. Verify with `sudo systemctl status meshcore-weather-dispatch-update.socket --no-pager`. The update page can then perform future confirmed updates.
