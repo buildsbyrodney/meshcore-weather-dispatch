@@ -11,6 +11,7 @@ from .db import Database
 from .routes import bp
 from .timefmt import local_time, compact_local_time, system_timezone
 from .coverage import config_rows
+from .db import now
 
 csrf = CSRFProtect()
 
@@ -47,6 +48,8 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.jinja_env.filters["compacttime"] = lambda value: compact_local_time(value, app.extensions["db"].setting("timezone") or app.config.get("timezone") or system_timezone())
     app.extensions["db"].initialize()
     app.extensions["db"].bootstrap_operational_settings(config)
+    # Preserve the switch but never replay alerts observed while stopped.
+    app.extensions["db"].save_setting("auto_dispatch_not_before",now())
     app.extensions["db"].migrate_users()
     app.extensions["db"].migrate_coverage(config_rows(app.config.get("counties",[])))
     app.config["coverage_db"]=app.extensions["db"]

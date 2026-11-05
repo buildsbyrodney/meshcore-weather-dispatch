@@ -258,7 +258,7 @@ def test_history_displays_current_mesh_alert_without_rewriting_audit(tmp_path):
  with app.test_client() as client:
   with client.session_transaction() as s:s["user"]="admin"
   page=client.get("/").data.decode()
- expected="DENSE FOG ADVISORY Expires November 5 at 9:00AM CST by NWS Birmingham AL"
+ expected="NEW DENSE FOG ADVISORY — Madison County, AL. Expires November 5 9:00AM CST NWS Birmingham AL"
  assert expected in page and 'class="mesh-alert-label">Mesh Alert</p><pre id="send-message"' in page
  with db.connect() as c:
   audit=c.execute("SELECT message FROM audit WHERE cap_id='new' AND action='ignored'").fetchone()
@@ -322,7 +322,7 @@ def test_reopen_regenerates_current_preview_in_saved_timezone_and_preserves_igno
  with client.session_transaction() as s:s["user"]="admin"
  page=client.get("/").data.decode();assert "Reopen" in page and "ignored" in page
  token=csrf_token(client);preview=client.post("/alerts/new/reopen-preview",data={"csrf_token":token}).get_json()
- assert preview["message"]=="DENSE FOG ADVISORY Expires November 5 at 9:00AM CST by NWS Birmingham AL"
+ assert preview["message"]=="NEW DENSE FOG ADVISORY — Madison County, AL. Expires November 5 9:00AM CST NWS Birmingham AL"
  monkeypatch.setattr("dispatch.routes.send",lambda *a: (_ for _ in ()).throw(AssertionError("reopen must not transmit")))
  response=client.post("/alerts/new/reopen",data={"csrf_token":token,"confirm":"yes","reopen_token":preview["token"]},follow_redirects=True)
  assert response.status_code==200 and db.get("new")["status"]=="pending" and db.get("new")["message"]==preview["message"]

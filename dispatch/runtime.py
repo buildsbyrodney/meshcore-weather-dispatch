@@ -3,6 +3,7 @@ from __future__ import annotations
 import json, re
 from .version import VERSION
 from .alert_types import DEFAULT_ALERT_TYPES
+from .alert_types import category
 
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 STATE = re.compile(r"^[A-Z]{2}$")
@@ -52,6 +53,10 @@ def runtime_config(config: dict, db) -> dict:
             # A corrupted persisted selection must never broaden monitoring.
             out["alert_types"]=[]
     out["transmit_enabled"]=(db.setting("transmit_enabled") or "false").lower()=="true"
+    out["auto_sending_enabled"]=(db.setting("auto_sending_enabled") or "false").lower()=="true"
+    saved_auto=_json(db.setting("auto_warning_types"), [])
+    # A malformed value, non-monitored type, or non-warning always fails closed.
+    out["auto_warning_types"]=sorted({x for x in saved_auto if isinstance(x,str) and x in out["alert_types"] and category(x)=="Warnings"})
     return out
 
 def transmissions_enabled(config: dict, db) -> bool:

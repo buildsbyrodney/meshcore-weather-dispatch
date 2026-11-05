@@ -2,7 +2,7 @@
 
 MeshCore Weather Dispatch is a small web console for a human operator to review National Weather Service (NWS) alerts and manually send an approved, compact message through a MeshCore Companion.
 
-It monitors NWS alerts, but it **never transmits automatically**. Every weather or test message needs an authenticated administrator, an explicit action, and a final confirmation. A Companion accepting a command is recorded as radio acceptance; it is not proof of over-the-air delivery.
+It monitors NWS alerts. Manual dispatch is the default; an authenticated administrator may explicitly turn on automatic dispatch for selected NWS **Warning** types from the top of the console. Watches and advisories always remain manual. A Companion accepting a command is recorded as radio acceptance; it is not proof of over-the-air delivery.
 
 Current release candidate: [`v1.0.0-rc.2`](docs/releases/v1.0.0-rc.2.md).
 
@@ -14,7 +14,9 @@ The deployment uses Nginx on port 80 and Gunicorn only on `127.0.0.1:8080`. The 
 
 ## Safety model
 
-- Manual dispatch only; polling, startup, reconnects, Settings saves, and Test Alert creation never send a message.
+- Automatic sending defaults OFF for new and existing installations. It requires an authenticated, CSRF-protected confirmation and selected Warning types; its state changes are audited.
+- Auto mode only considers fresh, selected Warning CAP revisions observed after it was enabled (and after this process started). It has no durable retry queue, so startup, reconnects, and failed sends cannot release an old-alert backlog.
+- Official SAME/UGC codes determine the selected county names placed in each concise Mesh Alert. Cancellations reuse only the prior stored official coverage, never prose or polygon guesses.
 - Send requires login, CSRF validation, a server-issued signed preview, explicit confirmation, a current eligible alert, selected Companion/channel validation, and an atomic database claim.
 - Expired, canceled, superseded, already handled, or duplicate alerts cannot be dispatched.
 - The complete outgoing message, including an optional operator comment, is checked against the configured UTF-8 byte limit.
