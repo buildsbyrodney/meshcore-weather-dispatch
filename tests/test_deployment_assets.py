@@ -19,7 +19,7 @@ def test_web_updates_use_a_fixed_socket_activated_root_worker_without_sudo():
     assert "SocketUser=weatherdispatch" in socket and "SocketMode=0660" in socket and "Accept=yes" in socket
     assert "User=root" in worker and "StandardInput=socket" in worker and "StandardOutput=socket" not in worker
     assert 'case "$request" in update|reboot)' in script and "flock -n" in script
-    assert "systemctl stop meshcore-weather-dispatch" in script
+    assert "systemctl stop meshcore-weather-dispatch" in update
     assert "NOPASSWD" not in install
     assert "NOPASSWD" not in update
     assert "meshcore-weather-dispatch-update.socket" in install and "meshcore-weather-dispatch-update.socket" in update
