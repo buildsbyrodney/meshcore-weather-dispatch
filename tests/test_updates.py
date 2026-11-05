@@ -51,6 +51,7 @@ def test_completed_update_output_is_hidden_on_a_fresh_visit_but_preserved_for_th
 def test_running_and_failed_update_output_remain_visible_on_page_load(tmp_path):
  for status,message in (("running","Update running"),("failed","Update failed; see console")):
   calls=[];cfg=config(tmp_path,calls);state=tmp_path/status;state.mkdir()
+  cfg["update_state_dir"]=str(state)
   (state/"status.json").write_text(json.dumps({"status":status,"message":message}))
   (state/"update.log").write_text(f"{status} output")
   app=create_app(cfg);client=app.test_client()
