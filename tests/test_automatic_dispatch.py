@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from dispatch import create_app
 from dispatch.poller import ingest
+from dispatch.automatic import AutomaticQueue
 
 def config(tmp_path):
     return {"TESTING":True,"secret_key":"test","database":str(tmp_path/"auto.sqlite"),"admin_username":"admin","admin_password_hash":"hash","nws_user_agent":"tests@example.invalid","states":["AL"],"alert_types":["Tornado Warning","Tornado Watch"],"counties":[{"name":"Bibb County, AL","same":"001007","ugc":"ALC007"},{"name":"Jefferson County, AL","same":"001073","ugc":"ALC073"}],"max_message_bytes":180,"transmit_enabled":True,"poll_seconds":60,"start_poller":False}
@@ -48,4 +49,20 @@ def test_cancel_uses_prior_official_counties_only_after_auto_send(tmp_path,monke
     monkeypatch.setattr("dispatch.automatic.verify_channel",lambda *a: None)
     monkeypatch.setattr("dispatch.automatic.send",lambda *a: sent.append(a[-1]) or "accepted")
     ingest(app,[feature("original")]);cancel=feature("cancel","Cancel","sender,original,when",codes=[]);cancel["properties"]["geocode"]={};ingest(app,[cancel])
+    queue=app.extensions["auto_queue"];queue.last_attempt-=5;queue._timer_fired()
     assert len(sent)==2 and sent[-1].startswith("CANCELED TORNADO WARNING") and "Bibb County, AL" in sent[-1]
+
+def test_simultaneous_auto_work_is_spaced_and_old_cancel_is_rejected(tmp_path,monkeypatch):
+    app=create_app(config(tmp_path));enabled(app);sent=[];clock=[0.0]
+    class Timer:
+        def __init__(self,delay,fn): self.delay=delay;self.fn=fn;self.daemon=False
+        def start(self): pass
+    queue=AutomaticQueue(app,clock=lambda:clock[0],timer=Timer);app.extensions["auto_queue"]=queue
+    monkeypatch.setattr("dispatch.automatic.auto_device_state",lambda db: ({},{"device":"fake"},"connected"))
+    monkeypatch.setattr("dispatch.automatic.verify_channel",lambda *a: None)
+    monkeypatch.setattr("dispatch.automatic.send",lambda *a: sent.append((clock[0],a[-2])) or "accepted")
+    ingest(app,[feature("one"),feature("two")]);assert [x[0] for x in sent]==[0.0]
+    clock[0]=4.9;queue._timer_fired();assert len(sent)==1
+    clock[0]=5.0;queue._timer_fired();assert [x[0] for x in sent]==[0.0,5.0]
+    old=feature("old-cancel","Cancel","sender,one,when",codes=[]);old["properties"].update({"sent":"2000-01-01T00:00:00+00:00","geocode":{}});ingest(app,[old])
+    assert len(sent)==2
