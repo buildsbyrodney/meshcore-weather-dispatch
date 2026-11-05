@@ -212,7 +212,17 @@ jobs:
           import socket
           s=socket.socket(socket.AF_UNIX); s.connect('/run/meshcore-weather-dispatch/update.sock'); s.sendall(b'update\n')
           PY
-          for attempt in $(seq 1 30); do sudo grep -q '"status":"success"' /var/lib/meshcore-weather-dispatch/web-updates/status.json && break; sleep 1; done
+          success=0
+          for attempt in $(seq 1 30); do if sudo grep -q '"status":"success"' /var/lib/meshcore-weather-dispatch/web-updates/status.json; then success=1; break; fi; sleep 1; done
+          if [ "$success" != 1 ]; then
+            echo 'update worker did not produce a successful status';
+            sudo systemctl status meshcore-weather-dispatch-update.socket --no-pager || true;
+            sudo systemctl list-units 'meshcore-weather-dispatch-update@*' --all --no-pager || true;
+            sudo journalctl -u 'meshcore-weather-dispatch-update@*' -n 100 --no-pager || true;
+            sudo ls -lah /run/meshcore-weather-dispatch/ || true;
+            sudo ls -lah /var/lib/meshcore-weather-dispatch/web-updates/ || true;
+            exit 1;
+          fi
           sudo grep -q 'Updated successfully' /var/lib/meshcore-weather-dispatch/web-updates/update.log
           sudo systemctl is-active --quiet meshcore-weather-dispatch
           curl -fsSI http://127.0.0.1/ | grep -qi HTTP/
