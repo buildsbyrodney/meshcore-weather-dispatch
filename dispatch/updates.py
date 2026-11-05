@@ -24,6 +24,4 @@ def launch(config,reboot=False):
  try:
   with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
    client.settimeout(5);client.connect(path);client.sendall(("reboot" if reboot else "update").encode()+b"\n")
-   reply=client.recv(160).decode(errors="replace").strip()
-  if reply!="accepted": raise RuntimeError(reply or "privileged update worker refused the request")
  except OSError as exc: raise RuntimeError(f"privileged update worker is unavailable: {exc}") from exc

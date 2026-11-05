@@ -28,7 +28,6 @@ def test_production_update_request_uses_only_the_guarded_socket(monkeypatch):
   def settimeout(self,value): calls.append(("timeout",value))
   def connect(self,value): calls.append(("connect",value))
   def sendall(self,value): calls.append(("send",value))
-  def recv(self,value): return b"accepted\n"
  monkeypatch.setattr(updates.socket,"socket",lambda *args:Socket())
  updates.launch({});updates.launch({},reboot=True)
  assert calls==[("timeout",5),("connect",updates.UPDATE_SOCKET),("send",b"update\n"),("timeout",5),("connect",updates.UPDATE_SOCKET),("send",b"reboot\n")]
