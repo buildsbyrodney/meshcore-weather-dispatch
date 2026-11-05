@@ -251,6 +251,30 @@ def test_compact_dashboard_includes_accessible_send_modal(tmp_path):
  assert 'type="button" class="send open-send"' in page and 'id="ignore-dialog"' in page and "open-ignore" in page
  assert "confirm('Ignore this warning?')" not in page
 
+def test_history_displays_current_mesh_alert_without_rewriting_audit(tmp_path):
+ cfg=config(tmp_path);cfg["timezone"]="America/Chicago";app=create_app(cfg);db=app.extensions["db"]
+ f=feature();f["properties"].update({"event":"Dense Fog Advisory","expires":"2099-11-05T15:00:00+00:00","senderName":"NWS Birmingham AL","areaDesc":", ".join(f"County {n}" for n in range(25))})
+ ingest(app,[f]);db.finish("new","ignored","operator")
+ with app.test_client() as client:
+  with client.session_transaction() as s:s["user"]="admin"
+  page=client.get("/").data.decode()
+ expected="DENSE FOG ADVISORY Expires November 5 at 9:00AM CST by NWS Birmingham AL"
+ assert expected in page and 'class="mesh-alert-label">Mesh Alert</p><pre id="send-message"' in page
+ with db.connect() as c:
+  audit=c.execute("SELECT message FROM audit WHERE cap_id='new' AND action='ignored'").fetchone()
+ assert audit["message"] != expected
+
+def test_history_uses_legacy_preview_then_cap_id_fallback(tmp_path):
+ app=create_app(config(tmp_path));db=app.extensions["db"]
+ db.audit("legacy","ignored",message="Legacy alert preview with county details")
+ db.audit("missing","ignored")
+ ingest(app,[feature("broken")]);db.finish("broken","ignored","operator")
+ with db.connect() as c:c.execute("UPDATE alerts SET raw_json='not JSON',message='Stored concise fallback' WHERE cap_id='broken'")
+ with app.test_client() as client:
+  with client.session_transaction() as s:s["user"]="admin"
+  page=client.get("/").data.decode()
+ assert "Legacy alert preview with county details" in page and "Stored concise fallback" in page and 'data-label="Alert" class="history-alert">missing' in page
+
 def test_connection_state_and_manual_permission_are_compact(tmp_path,monkeypatch):
  app=create_app(config(tmp_path));client=app.test_client()
  with client.session_transaction() as s:s["user"]="admin"
