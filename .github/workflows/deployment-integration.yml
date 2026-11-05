@@ -208,6 +208,11 @@ jobs:
           sudo test -d /var/backups/meshcore-weather-dispatch
           # This is the unprivileged browser-side handoff: it must execute the
           # replacement root helper and retain a final status/log after restart.
+          # The worker correctly has PrivateTmp=true, so keep this local-only
+          # Git fixture in its permitted durable state directory, not /tmp.
+          sudo git clone --bare /tmp/meshcore-origin.git /var/lib/meshcore-weather-dispatch/ci-origin.git
+          sudo chown -R weatherdispatch:weatherdispatch /var/lib/meshcore-weather-dispatch/ci-origin.git
+          sudo -u weatherdispatch git -C /opt/meshcore-weather-dispatch remote set-url origin file:///var/lib/meshcore-weather-dispatch/ci-origin.git
           sudo -u weatherdispatch python3 - <<'PY'
           import socket
           s=socket.socket(socket.AF_UNIX); s.connect('/run/meshcore-weather-dispatch/update.sock'); s.sendall(b'update\n')
